@@ -57,6 +57,9 @@ jobs:
       - name: Test (race + coverage)
         run: go test -race -cover ./...
 
+      - name: Integration tests (live Postgres)
+        run: go test -tags=integration -race ./internal/adapters/postgres/...
+
   frontend:
     name: Frontend (web)
     runs-on: ubuntu-latest

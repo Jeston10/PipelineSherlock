@@ -39,8 +39,13 @@ flowchart LR
     API --- HEALTH
 
     classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
-    class API,PG,HEALTH built;
+    class API,PG,HEALTH,WR,INBOX,WORKER,GLAPI built;
 ```
+
+> Shaded nodes are built as of M1 slice 2: the HTTP/DB spine (M0), the webhook
+> receiver and durable inbox (M1 slice 1), and the background worker plus GitLab
+> API client (M1 slice 2). The normalize → classify → fingerprint → group
+> analysis stages remain planned.
 
 **Walkthrough.** GitLab sends pipeline/job events to a webhook receiver, which
 validates them and writes them to a durable inbox (`webhook_events`) before
@@ -297,6 +302,102 @@ same event many times still yields exactly one stored row (202 either way, with
 `accepted` vs `duplicate`). The acknowledgement is fast because the event is
 only persisted here; fetching traces and classifying happen asynchronously in a
 later milestone.
+
+---
+
+## 9. Background worker: draining the inbox and reconciling state **[Built: M1]**
+
+Webhook ingestion (§8) only persists the delivery and acknowledges. The actual
+pipeline/job state is reconciled asynchronously by a background worker, so a
+slow or unavailable GitLab API never blocks webhook acknowledgement.
+
+```mermaid
+flowchart TD
+    START[Worker.Run loop] --> CTX{ctx cancelled?}
+    CTX -->|yes| STOP[stop cleanly]
+    CTX -->|no| CLAIM[events.ClaimNext<br/>FOR UPDATE SKIP LOCKED<br/>status=processing, attempts++]
+    CLAIM --> EMPTY{event claimed?}
+    EMPTY -->|no| IDLE[idle: wait poll interval<br/>interruptible by ctx] --> CTX
+    EMPTY -->|yes| PARSE[parse payload]
+    PARSE --> KIND{object_kind == pipeline?}
+    KIND -->|no| DONE[MarkProcessed<br/>nothing to reconcile] --> CTX
+    KIND -->|yes| SRC{GitLab token<br/>configured?}
+    SRC -->|yes| API[GitLab client:<br/>GetPipeline + ListPipelineJobs<br/>authoritative state]
+    SRC -->|no| PAY[use webhook payload<br/>fallback]
+    API --> UPSERT[PipelineRepo.Upsert<br/>pipeline + jobs in one tx]
+    PAY --> UPSERT
+    UPSERT --> OK{success?}
+    OK -->|yes| MP[MarkProcessed] --> CTX
+    OK -->|no| RETRY{attempts < max?}
+    RETRY -->|yes| RQ[Requeue → received<br/>record error_code] --> CTX
+    RETRY -->|no| MF[MarkFailed<br/>terminal] --> CTX
+```
+
+**Walkthrough.** The worker runs as a goroutine for the lifetime of the server
+and stops on the same shutdown signal. Each iteration **claims** one event with
+`ClaimNext`, which issues a single `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP
+LOCKED LIMIT 1)` — the row lock with `SKIP LOCKED` means many workers could run
+without ever claiming the same row, and the claim flips the status to
+`processing` and increments `attempts` atomically. The payload is parsed; only
+`object_kind == "pipeline"` carries pipeline state, so other event kinds are
+acknowledged as processed with nothing to do. When a GitLab token is configured
+the worker fetches **authoritative** pipeline and job state from the API (the
+stored payload can be stale by the time it is processed); otherwise it falls
+back to the payload itself. The result is upserted into `pipelines`/`jobs` in a
+single transaction, keyed on the GitLab ids so reprocessing converges instead of
+duplicating. On success the event is marked `processed`. On failure it is
+**requeued** (back to `received`, recording an error code) until the attempt
+bound is reached, after which it is **failed** terminally. When the inbox is
+empty the worker idles for a short, context-interruptible interval before
+polling again, draining eagerly while work remains.
+
+---
+
+## 10. GitLab API client: pagination, timeouts and bounded retries **[Built: M1]**
+
+The worker reads authoritative state through a small GitLab REST client that
+owns its own resilience concerns, so the use case stays free of HTTP detail.
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant C as GitLab client
+    participant GL as GitLab API
+
+    W->>C: GetPipeline(projectID, pipelineID)
+    loop attempt 0..maxRetries
+        C->>GL: GET /api/v4/projects/{id}/pipelines/{pid}<br/>PRIVATE-TOKEN header, per-request timeout
+        alt 2xx
+            GL-->>C: pipeline JSON
+            C-->>W: GitLabPipeline (timestamps parsed)
+        else 429 / 5xx / transport error
+            GL-->>C: retryable
+            C->>C: sleep backoff(2^attempt) + full jitter<br/>(ctx-cancellable)
+        else 4xx (401/403/404)
+            GL-->>C: non-retryable
+            C-->>W: error (no retry)
+        end
+    end
+
+    W->>C: ListPipelineJobs(projectID, pipelineID)
+    loop page = 1, 2, … until X-Next-Page empty
+        C->>GL: GET …/jobs?per_page=100&page=N
+        GL-->>C: jobs JSON + X-Next-Page header
+    end
+    C-->>W: []GitLabJob (all pages, bounded by maxJobPages)
+```
+
+**Walkthrough.** Every request carries a `PRIVATE-TOKEN` header and is bounded by
+the HTTP client's timeout. On a `429`, a `5xx`, or a transport error the client
+retries up to a fixed bound, sleeping an exponentially growing delay with **full
+jitter** (so many workers don't retry in lockstep) and honouring context
+cancellation during the wait. Client errors such as `401`/`403`/`404` are **not**
+retried — they will not fix themselves — and surface immediately. Job listing
+follows GitLab's pagination: it requests pages of 100 and follows the
+`X-Next-Page` response header until it is empty, with a hard page cap so a
+misbehaving server cannot loop forever. Timestamps are parsed from RFC3339 and
+durations normalized to whole seconds before the data crosses back into the
+application layer as `GitLabPipeline` / `GitLabJob`.
 
 ---
 

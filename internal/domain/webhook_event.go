@@ -52,6 +52,9 @@ type WebhookEvent struct {
 	ReceivedAt  time.Time
 	ProcessedAt *time.Time
 	ErrorCode   string
+	// Attempts counts how many times a worker has claimed this event for
+	// processing. It is used to bound retries before an event is failed.
+	Attempts int
 }
 
 // NewWebhookEvent validates and constructs an inbox event in the "received"

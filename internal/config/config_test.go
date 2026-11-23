@@ -31,6 +31,29 @@ func TestLoad_MinimalValidConfig(t *testing.T) {
 	if cfg.RedisEnabled() {
 		t.Errorf("RedisEnabled() = true, want false when REDIS_URL unset")
 	}
+	if cfg.GitLabBaseURL != "https://gitlab.com" {
+		t.Errorf("GitLabBaseURL default = %q, want https://gitlab.com", cfg.GitLabBaseURL)
+	}
+	if cfg.GitLabConfigured() {
+		t.Errorf("GitLabConfigured() = true, want false when GITLAB_TOKEN unset")
+	}
+}
+
+func TestLoad_GitLabConfigured(t *testing.T) {
+	cfg, err := Load(envMap(map[string]string{
+		"DATABASE_URL":    "postgres://localhost/ps",
+		"GITLAB_BASE_URL": "https://gitlab.example.com",
+		"GITLAB_TOKEN":    "glpat-secret",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GitLabBaseURL != "https://gitlab.example.com" {
+		t.Errorf("GitLabBaseURL = %q, want the override", cfg.GitLabBaseURL)
+	}
+	if !cfg.GitLabConfigured() {
+		t.Errorf("GitLabConfigured() = false, want true when GITLAB_TOKEN set")
+	}
 }
 
 func TestLoad_Validation(t *testing.T) {
@@ -103,12 +126,13 @@ func TestRedacted_NeverLeaksCredentials(t *testing.T) {
 	cfg, err := Load(envMap(map[string]string{
 		"DATABASE_URL": "postgres://admin:supersecret@db.internal:5432/ps",
 		"REDIS_URL":    "redis://:topsecret@cache.internal:6379/0",
+		"GITLAB_TOKEN": "glpat-tokensecret",
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := cfg.Redacted()
-	for _, leak := range []string{"supersecret", "topsecret", "admin"} {
+	for _, leak := range []string{"supersecret", "topsecret", "admin", "glpat-tokensecret"} {
 		if strings.Contains(out, leak) {
 			t.Errorf("Redacted() leaked %q: %s", leak, out)
 		}

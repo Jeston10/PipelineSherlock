@@ -44,9 +44,12 @@ func (r *fakeProjectRepo) List(_ context.Context) ([]domain.Project, error) {
 	return out, nil
 }
 
-// fakeEventRepo is an in-memory idempotent WebhookEventRepository.
+// fakeEventRepo is an in-memory WebhookEventRepository supporting the full
+// inbox lifecycle (idempotent insert, claim, and status transitions).
 type fakeEventRepo struct {
-	keys map[string]bool
+	keys   map[string]bool
+	events []*domain.WebhookEvent
+	nextID int
 }
 
 func newFakeEventRepo() *fakeEventRepo {
@@ -59,7 +62,55 @@ func (r *fakeEventRepo) Insert(_ context.Context, ev domain.WebhookEvent) (bool,
 		return false, nil
 	}
 	r.keys[key] = true
+	r.nextID++
+	ev.ID = strconv.Itoa(r.nextID)
+	ev.Status = domain.WebhookStatusReceived
+	stored := ev
+	r.events = append(r.events, &stored)
 	return true, nil
+}
+
+func (r *fakeEventRepo) ClaimNext(_ context.Context) (domain.WebhookEvent, bool, error) {
+	for _, e := range r.events {
+		if e.Status == domain.WebhookStatusReceived {
+			e.Status = domain.WebhookStatusProcessing
+			e.Attempts++
+			return *e, true, nil
+		}
+	}
+	return domain.WebhookEvent{}, false, nil
+}
+
+func (r *fakeEventRepo) find(id string) *domain.WebhookEvent {
+	for _, e := range r.events {
+		if e.ID == id {
+			return e
+		}
+	}
+	return nil
+}
+
+func (r *fakeEventRepo) MarkProcessed(_ context.Context, id string) error {
+	if e := r.find(id); e != nil {
+		e.Status = domain.WebhookStatusProcessed
+	}
+	return nil
+}
+
+func (r *fakeEventRepo) Requeue(_ context.Context, id, code string) error {
+	if e := r.find(id); e != nil {
+		e.Status = domain.WebhookStatusReceived
+		e.ErrorCode = code
+	}
+	return nil
+}
+
+func (r *fakeEventRepo) MarkFailed(_ context.Context, id, code string) error {
+	if e := r.find(id); e != nil {
+		e.Status = domain.WebhookStatusFailed
+		e.ErrorCode = code
+	}
+	return nil
 }
 
 func TestRegisterProject_StoresHashNotPlaintext(t *testing.T) {

@@ -5,9 +5,10 @@ searchable, explainable failure incidents. The differentiator is **deterministic
 fingerprinting and evidence-backed diagnosis**, not a chat interface that guesses
 at root causes.
 
-> Status: **Milestone 0 (Foundation) complete.** This is an early-stage portfolio
-> project, not a production system. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for
-> exactly what is built and what is next.
+> Status: **Milestone 0 complete; Milestone 1 (GitLab ingestion) in progress —
+> slices 1 & 2 done.** This is an early-stage portfolio project, not a production
+> system. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what is built and
+> what is next.
 
 ---
 
@@ -22,24 +23,26 @@ incidents with the evidence attached.
 
 ## Architecture at a glance
 
-The full system (shaded = built in Milestone 0):
+The full system (shaded = built so far):
 
 ```mermaid
 flowchart LR
     GL[GitLab<br/>pipeline + job events] -->|webhook| WR[Webhook Receiver]
     WR --> INBOX[(webhook_events<br/>durable inbox)]
     INBOX --> WORKER[Background Worker]
+    WORKER -->|reconcile| GLAPI[GitLab API client]
     WORKER --> NORM[Log Normalizer]
     NORM --> CLS[Rule-based Classifier]
     CLS --> FP[Fingerprint Generator]
     FP --> GRP[Incident Grouper]
-    GRP --> PG[(PostgreSQL<br/>source of truth)]
+    WORKER --> PG[(PostgreSQL<br/>source of truth)]
+    GRP --> PG
     UI[React + TS dashboard] -->|REST| API[Go REST API]
     API --> PG
     API --- HEALTH[Health & readiness]
 
     classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
-    class API,PG,HEALTH built;
+    class API,PG,HEALTH,WR,INBOX,WORKER,GLAPI built;
 ```
 
 **Every mechanism we implement has a workflow diagram with a walkthrough in
@@ -104,12 +107,15 @@ cd web && npm install && npm run dev
 ## Repository layout
 
 ```
-cmd/server/            # entry point: wiring + lifecycle
+cmd/server/            # entry point: wiring + lifecycle (+ background worker)
 internal/
   config/              # env config, fail-fast validation
-  domain/              # core entities + invariants (Project)
-  platform/postgres/   # pgx pool + embedded migrator (adapter)
-  transport/http/      # router, middleware, health/readiness
+  domain/              # core entities + invariants (Project, Pipeline, Job, WebhookEvent)
+  application/         # use cases + ports (register, ingest, process, worker)
+  adapters/gitlab/     # GitLab REST client (pagination, retries, timeouts)
+  adapters/postgres/   # repository implementations (projects, inbox, pipelines)
+  platform/postgres/   # pgx pool + embedded migrator
+  transport/http/      # router, middleware, health/readiness, API handlers
 migrations/            # embedded, reversible SQL migrations
 tests/fixtures/        # deterministic demo/seed data
 docs/                  # architecture.md (diagrams) + adr/
@@ -127,10 +133,16 @@ web/                   # React + TypeScript dashboard
 - **Built (M1 slice 1):** project registration + webhook secret, the GitLab
   webhook endpoint with token validation, and a durable, de-duplicated event
   inbox. See the diagrams in [docs/architecture.md](docs/architecture.md) §7–§8.
-- **Not yet built:** GitLab API trace fetching, background processing of the
-  inbox, log classification, fingerprinting, the dashboard beyond a health view,
-  auth/RBAC, and any benchmark claims. No performance or scale numbers are
-  claimed.
+- **Built (M1 slice 2):** a background worker that claims inbox events
+  (`FOR UPDATE SKIP LOCKED`), reconciles pipeline/job state against the GitLab
+  API when a token is configured (falling back to the webhook payload),
+  idempotently upserts `pipelines`/`jobs`, and bounds retries with requeue/fail.
+  The GitLab REST client handles pagination, per-request timeouts and retries
+  with jitter. See [docs/architecture.md](docs/architecture.md) §9–§10.
+- **Not yet built:** GitLab job *trace* fetching, log normalization and
+  classification, deterministic fingerprinting and incident grouping, the
+  dashboard beyond a health view, auth/RBAC, and any benchmark claims. No
+  performance or scale numbers are claimed.
 
 ## License
 

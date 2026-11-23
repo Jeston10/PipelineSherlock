@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-23
+Last updated: 2026-11-23 (M1 slice 2)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -69,13 +69,38 @@ Last updated: 2026-11-23
 
 Verified locally: `go build`, `go vet`, `gofmt -s`, `go test ./...` all clean.
 
-### Slice 2 — processing (next)
+### Slice 2 — processing ✅ done (this slice)
 
-- GitLab API client (pipeline/job metadata + traces) behind an interface, with
-  timeouts, pagination and bounded retries + jitter.
-- Background worker: claim `received` inbox events, fetch via the client, upsert
-  pipeline/job rows, mark `processed`/`failed`, with backoff.
-- Live-DB integration test exercising migrate + register + webhook + dedup.
+- Migration `0003`: `webhook_events.attempts` (reversible).
+- `config`: `GITLAB_BASE_URL` (default `https://gitlab.com`) and optional
+  `GITLAB_TOKEN`; `GitLabConfigured()` gates reconciliation; the token is
+  redaction-guarded in logs. Unit-tested.
+- `domain`: `Pipeline` + `Job` entities (immutable timing via `WithTiming`);
+  `WebhookEvent` gains an `Attempts` counter. Unit-tested.
+- `application`: `ProcessEventsService` (claim → parse → reconcile → upsert →
+  mark processed, with bounded requeue/fail) and a `Worker` loop that drains the
+  inbox and idles when empty. Unit-tested with in-memory fakes.
+- `adapters/postgres`: `WebhookEventRepo` gains `ClaimNext`
+  (`FOR UPDATE SKIP LOCKED`), `MarkProcessed`, `Requeue`, `MarkFailed`;
+  new `PipelineRepo.Upsert` (pipeline + jobs in one tx, idempotent).
+- `adapters/gitlab`: REST client implementing `application.GitLabClient` with
+  per-request timeout, pagination (`X-Next-Page`) and bounded retries with full
+  jitter. Unit-tested against `httptest`.
+- `cmd/server`: worker wired into the lifecycle, started on `serve` and stopped
+  on shutdown; GitLab reconciliation enabled only when a token is configured.
+- Live-DB integration test (`-tags=integration`) exercising migrate → register →
+  webhook insert + dedup → claim → idempotent upsert → mark processed; wired
+  into CI against the Postgres service.
+
+Verified locally: `go build`, `go build -tags=integration`, `go vet`,
+`gofmt -s`, `go test ./...` all clean. The race detector and the live-DB
+integration test run in CI (local gcc is 32-bit, so `-race` cannot compile
+here; no local Postgres for the integration test).
+
+### Slice 3 — analysis (next)
+
+- Job trace fetching, log normalization and rule-based classification.
+- Deterministic failure fingerprinting and incident grouping.
 
 ## Exact local run commands
 

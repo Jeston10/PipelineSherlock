@@ -6,6 +6,7 @@ package application
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/Jeston10/pipeline-sherlock/internal/domain"
 )
@@ -31,11 +32,65 @@ type ProjectRepository interface {
 	List(ctx context.Context) ([]domain.Project, error)
 }
 
-// WebhookEventRepository persists inbox events idempotently.
+// WebhookEventRepository persists inbox events idempotently and hands them out
+// to workers for processing.
 type WebhookEventRepository interface {
 	// Insert stores the event. It is idempotent on (ProjectID, DeliveryKey):
 	// inserted is false when an event with the same delivery key already
 	// exists, in which case nothing is written. This is the de-duplication
 	// mechanism for redelivered webhooks.
 	Insert(ctx context.Context, ev domain.WebhookEvent) (inserted bool, err error)
+
+	// ClaimNext atomically selects the oldest unprocessed event, marks it
+	// "processing", increments its attempt counter, and returns it. It uses
+	// row-level locking (FOR UPDATE SKIP LOCKED) so concurrent workers never
+	// claim the same row. claimed is false (nil error) when the inbox is empty.
+	ClaimNext(ctx context.Context) (ev domain.WebhookEvent, claimed bool, err error)
+
+	// MarkProcessed records terminal success for the event.
+	MarkProcessed(ctx context.Context, id string) error
+
+	// Requeue returns the event to the "received" state for another attempt,
+	// recording the last error code. Used while attempts remain.
+	Requeue(ctx context.Context, id, errorCode string) error
+
+	// MarkFailed records terminal failure for the event with an error code.
+	MarkFailed(ctx context.Context, id, errorCode string) error
+}
+
+// PipelineRepository upserts reconciled pipeline and job state.
+type PipelineRepository interface {
+	// Upsert writes the pipeline and its jobs, replacing any prior state for
+	// the same (project, gitlab pipeline id). It is idempotent so the worker
+	// can safely reprocess an event.
+	Upsert(ctx context.Context, p domain.Pipeline, jobs []domain.Job) error
+}
+
+// GitLabPipeline is the subset of a GitLab pipeline the worker reconciles.
+type GitLabPipeline struct {
+	ID         int64
+	Ref        string
+	SHA        string
+	Status     string
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	Duration   *int
+}
+
+// GitLabJob is the subset of a GitLab job the worker reconciles.
+type GitLabJob struct {
+	ID         int64
+	Name       string
+	Stage      string
+	Status     string
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	Duration   *int
+}
+
+// GitLabClient reads authoritative pipeline/job state from the GitLab API.
+// Implementations handle pagination, timeouts and bounded retries internally.
+type GitLabClient interface {
+	GetPipeline(ctx context.Context, gitlabProjectID, pipelineID int64) (GitLabPipeline, error)
+	ListPipelineJobs(ctx context.Context, gitlabProjectID, pipelineID int64) ([]GitLabJob, error)
 }

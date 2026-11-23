@@ -29,6 +29,12 @@ type Config struct {
 	// ReadTimeout / WriteTimeout bound inbound HTTP handling.
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+	// GitLabBaseURL is the GitLab API base (e.g. https://gitlab.com). The
+	// background worker reconciles pipeline/job state against this host.
+	GitLabBaseURL string
+	// GitLabToken is an optional personal/project access token. When empty the
+	// worker is disabled and the service only ingests webhooks.
+	GitLabToken string
 }
 
 // Default values applied when an optional variable is unset.
@@ -37,6 +43,7 @@ const (
 	defaultShutdownTimeout = 15 * time.Second
 	defaultReadTimeout     = 15 * time.Second
 	defaultWriteTimeout    = 30 * time.Second
+	defaultGitLabBaseURL   = "https://gitlab.com"
 )
 
 // Getenv is the function used to read environment variables. It is a variable
@@ -60,6 +67,8 @@ func Load(getenv Getenv) (Config, error) {
 		ShutdownTimeout: defaultShutdownTimeout,
 		ReadTimeout:     defaultReadTimeout,
 		WriteTimeout:    defaultWriteTimeout,
+		GitLabBaseURL:   firstNonEmpty(getenv("GITLAB_BASE_URL"), defaultGitLabBaseURL),
+		GitLabToken:     strings.TrimSpace(getenv("GITLAB_TOKEN")),
 	}
 
 	if d, err := durationEnv(getenv, "SHUTDOWN_TIMEOUT"); err != nil {
@@ -98,6 +107,9 @@ func (c Config) validate() error {
 	if c.ShutdownTimeout <= 0 {
 		problems = append(problems, "SHUTDOWN_TIMEOUT must be positive")
 	}
+	if c.GitLabBaseURL == "" || !strings.Contains(c.GitLabBaseURL, "://") {
+		problems = append(problems, fmt.Sprintf("GITLAB_BASE_URL %q is not a valid URL", c.GitLabBaseURL))
+	}
 
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid configuration: %s", strings.Join(problems, "; "))
@@ -109,13 +121,18 @@ func (c Config) validate() error {
 // credentials. It is intended for startup logging.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"env=%s http_addr=%s database=%s redis=%s shutdown_timeout=%s",
-		c.Env, c.HTTPAddr, redactURL(c.DatabaseURL), redactURL(c.RedisURL), c.ShutdownTimeout,
+		"env=%s http_addr=%s database=%s redis=%s gitlab=%s gitlab_token=%s shutdown_timeout=%s",
+		c.Env, c.HTTPAddr, redactURL(c.DatabaseURL), redactURL(c.RedisURL),
+		c.GitLabBaseURL, redactSecret(c.GitLabToken), c.ShutdownTimeout,
 	)
 }
 
 // RedisEnabled reports whether a Redis URL was configured.
 func (c Config) RedisEnabled() bool { return c.RedisURL != "" }
+
+// GitLabConfigured reports whether a GitLab token is present, which enables the
+// background reconciliation worker.
+func (c Config) GitLabConfigured() bool { return c.GitLabToken != "" }
 
 func durationEnv(getenv Getenv, key string) (time.Duration, error) {
 	raw := strings.TrimSpace(getenv(key))
@@ -152,6 +169,14 @@ func redactURL(raw string) string {
 	scheme := strings.Index(raw, "://")
 	if at > 0 && scheme >= 0 && at > scheme {
 		return raw[:scheme+3] + "***@" + raw[at+1:]
+	}
+	return "***"
+}
+
+// redactSecret reports presence without revealing the value.
+func redactSecret(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return "(unset)"
 	}
 	return "***"
 }

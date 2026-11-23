@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	gitlabadapter "github.com/Jeston10/pipeline-sherlock/internal/adapters/gitlab"
 	pgrepo "github.com/Jeston10/pipeline-sherlock/internal/adapters/postgres"
 	"github.com/Jeston10/pipeline-sherlock/internal/application"
 	"github.com/Jeston10/pipeline-sherlock/internal/config"
@@ -84,8 +85,21 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	// Repositories (adapters) and use cases (application), wired here.
 	projectRepo := pgrepo.NewProjectRepo(db.Pool)
 	eventRepo := pgrepo.NewWebhookEventRepo(db.Pool)
+	pipelineRepo := pgrepo.NewPipelineRepo(db.Pool)
 	registerSvc := application.NewRegisterProjectService(projectRepo)
 	ingestSvc := application.NewIngestWebhookService(projectRepo, eventRepo)
+
+	// The background worker reconciles inbox events against GitLab when a token
+	// is configured; otherwise it falls back to the webhook payload.
+	var gitlabClient application.GitLabClient
+	if cfg.GitLabConfigured() {
+		gitlabClient = gitlabadapter.New(cfg.GitLabBaseURL, cfg.GitLabToken)
+		logger.Info("gitlab reconciliation enabled", slog.String("base_url", cfg.GitLabBaseURL))
+	} else {
+		logger.Info("gitlab reconciliation disabled (no GITLAB_TOKEN); using webhook payloads only")
+	}
+	processor := application.NewProcessEventsService(eventRepo, pipelineRepo, gitlabClient, logger)
+	worker := application.NewWorker(processor, logger)
 
 	handler := transporthttp.NewRouter(transporthttp.Deps{
 		Readiness: db,
@@ -105,6 +119,17 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Start the background worker; its lifetime is tied to shutdown.
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		if err := worker.Run(workerCtx); err != nil {
+			logger.Error("worker exited", slog.String("error", err.Error()))
+		}
+	}()
+
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("http server listening", slog.String("addr", cfg.HTTPAddr))
@@ -115,14 +140,18 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 
 	select {
 	case err := <-serverErr:
+		cancelWorker()
+		<-workerDone
 		return fmt.Errorf("http server: %w", err)
 	case <-ctx.Done():
 		logger.Info("shutdown signal received")
+		cancelWorker() // signal the worker to stop draining
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("graceful shutdown: %w", err)
 		}
+		<-workerDone // wait for the worker goroutine to return
 		logger.Info("server stopped cleanly")
 		return nil
 	}
