@@ -345,7 +345,9 @@ the worker fetches **authoritative** pipeline and job state from the API (the
 stored payload can be stale by the time it is processed); otherwise it falls
 back to the payload itself. The result is upserted into `pipelines`/`jobs` in a
 single transaction, keyed on the GitLab ids so reprocessing converges instead of
-duplicating. On success the event is marked `processed`. On failure it is
+duplicating. Each **failed** job is then fingerprinted and its diagnosis stored
+(the analysis engine in §11; the persistence flow in §12). On success the event
+is marked `processed`. On failure it is
 **requeued** (back to `received`, recording an error code) until the attempt
 bound is reached, after which it is **failed** terminally. When the inbox is
 empty the worker idles for a short, context-interruptible interval before
@@ -401,15 +403,14 @@ application layer as `GitLabPipeline` / `GitLabJob`.
 
 ---
 
-## 11. Deterministic failure analysis: normalize → classify → fingerprint **[Built: M2 slice 1 — engine; persistence & wiring Planned]**
+## 11. Deterministic failure analysis: normalize → classify → fingerprint **[Built: M2]**
 
 This is the project's differentiator. A failed job's log is reduced to a stable
 **fingerprint** so that the *same* failure recurring across branches, runs and
 time collapses to one identity — without any model guessing. The engine is pure
 (no I/O, no clock, no randomness), which is what makes it reproducible and
-testable. Fetching the trace is built; persisting diagnoses into
-`failure_fingerprints` / `failure_occurrences` and calling the engine from the
-worker arrive in M2 slice 2.
+testable. The worker now calls this engine for each failed job and persists the
+result (see §12 for the storage flow).
 
 ```mermaid
 flowchart TD
@@ -422,10 +423,10 @@ flowchart TD
     PICK --> NORM["Normalize signature line<br/>strip ANSI; timestamps/durations/<br/>hashes/addresses/numbers → placeholders"]
     NORM --> FP["Fingerprint = SHA-256(<br/>project ∥ category ∥ signature ∥ vN)"]
     FP --> DIAG[Diagnosis:<br/>category, normalized_signature,<br/>fingerprint, evidence, evidence_hash]
-    DIAG -.Planned.-> STORE[(failure_fingerprints<br/>+ failure_occurrences)]
+    DIAG --> STORE[(failure_fingerprints<br/>+ failure_occurrences)]
 
     classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
-    class TRACE,CLS,PICK,NORM,FP,DIAG built;
+    class TRACE,CLS,PICK,NORM,FP,DIAG,STORE built;
 ```
 
 **Walkthrough.** The raw trace is first **classified** by scanning its lines
@@ -445,6 +446,62 @@ change later without clashing with old fingerprints. The result is a
 `Diagnosis` carrying everything the next slice needs to upsert into
 `failure_fingerprints` (incrementing an occurrence count) and append to
 `failure_occurrences` with the evidence attached.
+
+---
+
+## 12. Fingerprint persistence and worker wiring **[Built: M2]**
+
+The worker drives the analysis engine: after a failed pipeline's jobs are
+upserted, each **failed** job's trace is fetched, analysed, and its diagnosis
+recorded. Recording is idempotent so reprocessing an event never double-counts.
+
+```mermaid
+sequenceDiagram
+    participant W as Worker (reconcile)
+    participant PR as PipelineRepo
+    participant GL as GitLab client
+    participant AN as analysis.Analyze
+    participant FR as FingerprintRepo
+    participant DB as PostgreSQL
+
+    W->>PR: Upsert(pipeline, jobs)
+    PR-->>W: map[gitlab_job_id → jobs.id]
+    opt GitLab token configured
+        loop each job with status = failed
+            W->>GL: GetJobTrace(projectID, jobID)
+            alt trace fetched
+                GL-->>W: raw trace
+                W->>AN: Analyze(projectID, trace)
+                AN-->>W: Diagnosis (category, signature, fingerprint, evidence)
+                W->>FR: RecordOccurrence(job.id, diagnosis)
+                FR->>DB: upsert failure_fingerprints (last_seen_at) → id
+                FR->>DB: insert failure_occurrences ON CONFLICT (job, fp) DO NOTHING
+                alt new occurrence row
+                    FR->>DB: occurrence_count = occurrence_count + 1
+                end
+            else trace error
+                GL-->>W: error
+                W->>W: log + skip (best-effort)
+            end
+        end
+    end
+```
+
+**Walkthrough.** `PipelineRepo.Upsert` now returns the persisted row id for each
+job, so occurrences can point at the exact `jobs` row. Fingerprinting requires
+the job log, which is only available through the GitLab API, so it runs **only
+when a token is configured** — without one, the worker still reconciles and
+stores pipeline/job state, it just doesn't fingerprint. For each failed job the
+worker fetches the trace, runs the pure `Analyze`, and calls
+`RecordOccurrence`, which in **one transaction** upserts the fingerprint
+(refreshing `last_seen_at`), inserts the occurrence under a unique
+`(job_id, fingerprint_id)` constraint, and increments `occurrence_count` **only
+when a new occurrence row was actually written**. That uniqueness is what makes
+reprocessing safe: the same job's failure recorded twice yields one occurrence
+and a count of one. Fingerprinting is **best-effort** — a trace-fetch or
+persistence error for one job is logged and skipped, never failing the event,
+because the authoritative pipeline/job state is already stored. Storing the
+occurrence history is what later milestones will group into incidents.
 
 ---
 

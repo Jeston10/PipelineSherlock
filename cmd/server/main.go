@@ -86,6 +86,7 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	projectRepo := pgrepo.NewProjectRepo(db.Pool)
 	eventRepo := pgrepo.NewWebhookEventRepo(db.Pool)
 	pipelineRepo := pgrepo.NewPipelineRepo(db.Pool)
+	fingerprintRepo := pgrepo.NewFingerprintRepo(db.Pool)
 	registerSvc := application.NewRegisterProjectService(projectRepo)
 	ingestSvc := application.NewIngestWebhookService(projectRepo, eventRepo)
 
@@ -98,7 +99,7 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	} else {
 		logger.Info("gitlab reconciliation disabled (no GITLAB_TOKEN); using webhook payloads only")
 	}
-	processor := application.NewProcessEventsService(eventRepo, pipelineRepo, gitlabClient, logger)
+	processor := application.NewProcessEventsService(eventRepo, pipelineRepo, fingerprintRepo, gitlabClient, logger)
 	worker := application.NewWorker(processor, logger)
 
 	handler := transporthttp.NewRouter(transporthttp.Deps{

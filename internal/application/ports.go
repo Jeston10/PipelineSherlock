@@ -62,8 +62,31 @@ type WebhookEventRepository interface {
 type PipelineRepository interface {
 	// Upsert writes the pipeline and its jobs, replacing any prior state for
 	// the same (project, gitlab pipeline id). It is idempotent so the worker
-	// can safely reprocess an event.
-	Upsert(ctx context.Context, p domain.Pipeline, jobs []domain.Job) error
+	// can safely reprocess an event. It returns a map from each job's GitLab id
+	// to its persisted row id, so callers can attach failure occurrences.
+	Upsert(ctx context.Context, p domain.Pipeline, jobs []domain.Job) (jobIDs map[int64]string, err error)
+}
+
+// FingerprintOccurrence is one observed instance of a fingerprinted failure,
+// ready to be persisted.
+type FingerprintOccurrence struct {
+	ProjectID           domain.ProjectID
+	JobID               string // the persisted jobs.id this failure was seen on
+	Fingerprint         string
+	Category            string
+	NormalizedSignature string
+	AlgorithmVersion    int
+	Evidence            string
+	EvidenceHash        string
+}
+
+// FingerprintRepository persists deterministic failure fingerprints and their
+// occurrences.
+type FingerprintRepository interface {
+	// RecordOccurrence upserts the fingerprint and appends an occurrence for the
+	// job. It is idempotent per (job, fingerprint): recording the same job's
+	// failure twice adds no second occurrence and does not double-count.
+	RecordOccurrence(ctx context.Context, occ FingerprintOccurrence) error
 }
 
 // GitLabPipeline is the subset of a GitLab pipeline the worker reconciles.
@@ -93,4 +116,6 @@ type GitLabJob struct {
 type GitLabClient interface {
 	GetPipeline(ctx context.Context, gitlabProjectID, pipelineID int64) (GitLabPipeline, error)
 	ListPipelineJobs(ctx context.Context, gitlabProjectID, pipelineID int64) ([]GitLabJob, error)
+	// GetJobTrace returns the raw log text for a job (used for fingerprinting).
+	GetJobTrace(ctx context.Context, gitlabProjectID, jobID int64) (string, error)
 }

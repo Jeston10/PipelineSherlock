@@ -5,9 +5,9 @@ searchable, explainable failure incidents. The differentiator is **deterministic
 fingerprinting and evidence-backed diagnosis**, not a chat interface that guesses
 at root causes.
 
-> Status: **Milestone 0 complete; Milestone 1 (GitLab ingestion) complete
-> (slices 1 & 2); Milestone 2 (failure analysis) in progress — slice 1 (the
-> deterministic analysis engine) done.** This is an early-stage portfolio
+> Status: **Milestone 0 complete; Milestone 1 (GitLab ingestion) complete;
+> Milestone 2 (failure analysis) complete — the engine (slice 1) plus
+> persistence and worker wiring (slice 2).** This is an early-stage portfolio
 > project, not a production system. See [PROJECT_STATUS.md](PROJECT_STATUS.md)
 > for exactly what is built and what is next.
 
@@ -146,10 +146,16 @@ web/                   # React + TypeScript dashboard
   SHA-256 fingerprinting (`internal/analysis`), plus GitLab job *trace*
   fetching. Pure and fully unit-tested. See
   [docs/architecture.md](docs/architecture.md) §11.
-- **Not yet built:** persisting diagnoses into `failure_fingerprints` /
-  `failure_occurrences` and wiring the engine into the worker (M2 slice 2),
-  incident grouping, the dashboard beyond a health view, auth/RBAC, and any
-  benchmark claims. No performance or scale numbers are claimed.
+- **Built (M2 slice 2):** the worker fingerprints each failed job (fetch trace →
+  analyse → persist) into `failure_fingerprints` / `failure_occurrences`, with
+  idempotent, de-duplicated occurrence counting (unique `(job_id,
+  fingerprint_id)`; count bumped only on a new occurrence). Best-effort, so a
+  trace error never fails the event. Fingerprinting requires a GitLab token (it
+  needs job logs). See [docs/architecture.md](docs/architecture.md) §12.
+- **Not yet built:** grouping fingerprints into incidents (regression / flaky
+  detection), a read API and the dashboard beyond a health view, GitLab MR
+  write-back, auth/RBAC, and any benchmark claims. No performance or scale
+  numbers are claimed.
 
 ## License
 

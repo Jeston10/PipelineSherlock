@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -22,14 +23,18 @@ type upsertCall struct {
 	jobs     []domain.Job
 }
 
-func (r *fakePipelineRepo) Upsert(_ context.Context, p domain.Pipeline, jobs []domain.Job) error {
+func (r *fakePipelineRepo) Upsert(_ context.Context, p domain.Pipeline, jobs []domain.Job) (map[int64]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.err != nil {
-		return r.err
+		return nil, r.err
 	}
 	r.upserts = append(r.upserts, upsertCall{pipeline: p, jobs: jobs})
-	return nil
+	ids := make(map[int64]string, len(jobs))
+	for _, j := range jobs {
+		ids[j.GitLabJobID] = fmt.Sprintf("job-%d", j.GitLabJobID)
+	}
+	return ids, nil
 }
 
 // count returns the number of recorded upserts under the lock.
@@ -44,6 +49,8 @@ type fakeGitLabClient struct {
 	pipeline GitLabPipeline
 	jobs     []GitLabJob
 	err      error
+	trace    string
+	traceErr error
 }
 
 func (c fakeGitLabClient) GetPipeline(context.Context, int64, int64) (GitLabPipeline, error) {
@@ -51,6 +58,32 @@ func (c fakeGitLabClient) GetPipeline(context.Context, int64, int64) (GitLabPipe
 }
 func (c fakeGitLabClient) ListPipelineJobs(context.Context, int64, int64) ([]GitLabJob, error) {
 	return c.jobs, c.err
+}
+func (c fakeGitLabClient) GetJobTrace(context.Context, int64, int64) (string, error) {
+	return c.trace, c.traceErr
+}
+
+// fakeFingerprintRepo records occurrences and can be made to fail.
+type fakeFingerprintRepo struct {
+	mu          sync.Mutex
+	occurrences []FingerprintOccurrence
+	err         error
+}
+
+func (r *fakeFingerprintRepo) RecordOccurrence(_ context.Context, occ FingerprintOccurrence) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
+	r.occurrences = append(r.occurrences, occ)
+	return nil
+}
+
+func (r *fakeFingerprintRepo) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.occurrences)
 }
 
 const pipelinePayloadJSON = `{
@@ -77,7 +110,7 @@ func TestProcessNext_PayloadFallback(t *testing.T) {
 	pipelines := &fakePipelineRepo{}
 	mustInsert(t, events, "Pipeline Hook", pipelinePayloadJSON)
 
-	svc := NewProcessEventsService(events, pipelines, nil, nil)
+	svc := NewProcessEventsService(events, pipelines, nil, nil, nil)
 
 	progressed, err := svc.ProcessNext(ctx)
 	if err != nil {
@@ -113,7 +146,7 @@ func TestProcessNext_ReconcilesViaGitLab(t *testing.T) {
 		pipeline: GitLabPipeline{ID: 55, Ref: "main", SHA: "deadbeef", Status: "success"},
 		jobs:     []GitLabJob{{ID: 9, Name: "test", Stage: "test", Status: "success"}},
 	}
-	svc := NewProcessEventsService(events, pipelines, gitlab, nil)
+	svc := NewProcessEventsService(events, pipelines, nil, gitlab, nil)
 
 	if _, err := svc.ProcessNext(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -126,13 +159,75 @@ func TestProcessNext_ReconcilesViaGitLab(t *testing.T) {
 	}
 }
 
+func TestProcessNext_FingerprintsFailedJob(t *testing.T) {
+	ctx := context.Background()
+	events := newFakeEventRepo()
+	pipelines := &fakePipelineRepo{}
+	fingerprints := &fakeFingerprintRepo{}
+	mustInsert(t, events, "Pipeline Hook", pipelinePayloadJSON)
+
+	gitlab := fakeGitLabClient{
+		pipeline: GitLabPipeline{ID: 55, Ref: "main", SHA: "deadbeef", Status: "failed"},
+		jobs: []GitLabJob{
+			{ID: 9, Name: "test", Stage: "test", Status: "failed"},
+			{ID: 10, Name: "build", Stage: "build", Status: "success"},
+		},
+		trace: "--- FAIL: TestLogin (0.01s)\n    login_test.go:21: status = 500, want 200",
+	}
+	svc := NewProcessEventsService(events, pipelines, fingerprints, gitlab, nil)
+
+	if _, err := svc.ProcessNext(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fingerprints.count() != 1 {
+		t.Fatalf("occurrences = %d, want 1 (only the failed job)", fingerprints.count())
+	}
+	occ := fingerprints.occurrences[0]
+	if occ.JobID != "job-9" {
+		t.Errorf("JobID = %q, want job-9 (the failed job's row id)", occ.JobID)
+	}
+	if occ.Category != "test_failure" {
+		t.Errorf("category = %q, want test_failure", occ.Category)
+	}
+	if occ.Fingerprint == "" || occ.EvidenceHash == "" {
+		t.Errorf("fingerprint/evidence hash should be set: %+v", occ)
+	}
+}
+
+// A trace-fetch failure must not fail the event: pipeline state is already
+// persisted, so fingerprinting is best-effort.
+func TestProcessNext_FingerprintBestEffortOnTraceError(t *testing.T) {
+	ctx := context.Background()
+	events := newFakeEventRepo()
+	pipelines := &fakePipelineRepo{}
+	fingerprints := &fakeFingerprintRepo{}
+	mustInsert(t, events, "Pipeline Hook", pipelinePayloadJSON)
+
+	gitlab := fakeGitLabClient{
+		pipeline: GitLabPipeline{ID: 55, Ref: "main", SHA: "deadbeef", Status: "failed"},
+		jobs:     []GitLabJob{{ID: 9, Name: "test", Stage: "test", Status: "failed"}},
+		traceErr: errors.New("gitlab 500"),
+	}
+	svc := NewProcessEventsService(events, pipelines, fingerprints, gitlab, nil)
+
+	if _, err := svc.ProcessNext(ctx); err != nil {
+		t.Fatalf("event should still succeed despite trace error, got: %v", err)
+	}
+	if fingerprints.count() != 0 {
+		t.Errorf("occurrences = %d, want 0 (trace fetch failed)", fingerprints.count())
+	}
+	if events.events[0].Status != domain.WebhookStatusProcessed {
+		t.Errorf("event status = %q, want processed", events.events[0].Status)
+	}
+}
+
 func TestProcessNext_NonPipelineEventSkipped(t *testing.T) {
 	ctx := context.Background()
 	events := newFakeEventRepo()
 	pipelines := &fakePipelineRepo{}
 	mustInsert(t, events, "Push Hook", `{"object_kind":"push","project":{"id":1001}}`)
 
-	svc := NewProcessEventsService(events, pipelines, nil, nil)
+	svc := NewProcessEventsService(events, pipelines, nil, nil, nil)
 
 	progressed, err := svc.ProcessNext(ctx)
 	if err != nil {
@@ -151,7 +246,7 @@ func TestProcessNext_NonPipelineEventSkipped(t *testing.T) {
 
 func TestProcessNext_EmptyInbox(t *testing.T) {
 	events := newFakeEventRepo()
-	svc := NewProcessEventsService(events, &fakePipelineRepo{}, nil, nil)
+	svc := NewProcessEventsService(events, &fakePipelineRepo{}, nil, nil, nil)
 
 	progressed, err := svc.ProcessNext(context.Background())
 	if err != nil {
@@ -168,7 +263,7 @@ func TestProcessNext_RequeuesThenFails(t *testing.T) {
 	pipelines := &fakePipelineRepo{err: errors.New("db down")}
 	mustInsert(t, events, "Pipeline Hook", pipelinePayloadJSON)
 
-	svc := NewProcessEventsService(events, pipelines, nil, nil)
+	svc := NewProcessEventsService(events, pipelines, nil, nil, nil)
 	svc.maxAttempts = 2 // white-box: keep the test short
 
 	// Attempt 1 fails → requeued (back to received).

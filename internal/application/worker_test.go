@@ -21,7 +21,7 @@ func TestWorker_DrainsThenStops(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	svc := NewProcessEventsService(events, pipelines, nil, nil)
+	svc := NewProcessEventsService(events, pipelines, nil, nil, nil)
 	worker := NewWorker(svc, nil)
 	worker.idleDelay = time.Millisecond // white-box: poll fast
 

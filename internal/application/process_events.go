@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/Jeston10/pipeline-sherlock/internal/analysis"
 	"github.com/Jeston10/pipeline-sherlock/internal/domain"
 )
+
+// failedJobStatus is the GitLab job status that triggers fingerprinting.
+const failedJobStatus = "failed"
 
 // defaultMaxAttempts bounds how many times an event is retried before it is
 // marked failed terminally.
@@ -18,25 +22,28 @@ const defaultMaxAttempts = 5
 // and marks the event processed. Transient failures are requeued with the
 // attempt counter until the bound is reached, then failed.
 type ProcessEventsService struct {
-	events      WebhookEventRepository
-	pipelines   PipelineRepository
-	gitlab      GitLabClient // nil when no GitLab token is configured
-	logger      *slog.Logger
-	maxAttempts int
+	events       WebhookEventRepository
+	pipelines    PipelineRepository
+	fingerprints FingerprintRepository
+	gitlab       GitLabClient // nil when no GitLab token is configured
+	logger       *slog.Logger
+	maxAttempts  int
 }
 
 // NewProcessEventsService wires the processor. gitlab may be nil, in which case
-// reconciliation falls back to the webhook payload.
-func NewProcessEventsService(events WebhookEventRepository, pipelines PipelineRepository, gitlab GitLabClient, logger *slog.Logger) *ProcessEventsService {
+// reconciliation falls back to the webhook payload and failed jobs are not
+// fingerprinted (traces are only available through the GitLab API).
+func NewProcessEventsService(events WebhookEventRepository, pipelines PipelineRepository, fingerprints FingerprintRepository, gitlab GitLabClient, logger *slog.Logger) *ProcessEventsService {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &ProcessEventsService{
-		events:      events,
-		pipelines:   pipelines,
-		gitlab:      gitlab,
-		logger:      logger,
-		maxAttempts: defaultMaxAttempts,
+		events:       events,
+		pipelines:    pipelines,
+		fingerprints: fingerprints,
+		gitlab:       gitlab,
+		logger:       logger,
+		maxAttempts:  defaultMaxAttempts,
 	}
 }
 
@@ -113,10 +120,57 @@ func (s *ProcessEventsService) reconcile(ctx context.Context, ev domain.WebhookE
 		jobs = append(jobs, job)
 	}
 
-	if err := s.pipelines.Upsert(ctx, pipeline, jobs); err != nil {
+	jobIDs, err := s.pipelines.Upsert(ctx, pipeline, jobs)
+	if err != nil {
 		return fmt.Errorf("upsert pipeline %d: %w", glp.ID, err)
 	}
+
+	// Fingerprint failed jobs. This needs job traces, which are only available
+	// through the GitLab API, so it runs only when a client is configured.
+	if s.gitlab != nil && s.fingerprints != nil {
+		s.fingerprintFailedJobs(ctx, ev.ProjectID, gitlabProjectID, gljobs, jobIDs)
+	}
 	return nil
+}
+
+// fingerprintFailedJobs analyses each failed job's trace and records the
+// resulting diagnosis. It is best-effort: a per-job failure (trace fetch,
+// persistence) is logged and skipped rather than failing the whole event, since
+// the pipeline/job state has already been persisted.
+func (s *ProcessEventsService) fingerprintFailedJobs(ctx context.Context, projectID domain.ProjectID, gitlabProjectID int64, gljobs []GitLabJob, jobIDs map[int64]string) {
+	for _, gj := range gljobs {
+		if gj.Status != failedJobStatus {
+			continue
+		}
+		jobID, ok := jobIDs[gj.ID]
+		if !ok {
+			continue
+		}
+
+		trace, err := s.gitlab.GetJobTrace(ctx, gitlabProjectID, gj.ID)
+		if err != nil {
+			s.logger.Warn("fetch job trace failed",
+				slog.Int64("gitlab_job_id", gj.ID), slog.String("error", err.Error()))
+			continue
+		}
+
+		diag := analysis.Analyze(string(projectID), trace)
+		occ := FingerprintOccurrence{
+			ProjectID:           projectID,
+			JobID:               jobID,
+			Fingerprint:         diag.Fingerprint,
+			Category:            string(diag.Category),
+			NormalizedSignature: diag.NormalizedSignature,
+			AlgorithmVersion:    diag.AlgorithmVersion,
+			Evidence:            diag.Evidence,
+			EvidenceHash:        diag.EvidenceHash,
+		}
+		if err := s.fingerprints.RecordOccurrence(ctx, occ); err != nil {
+			s.logger.Warn("record occurrence failed",
+				slog.Int64("gitlab_job_id", gj.ID), slog.String("error", err.Error()))
+			continue
+		}
+	}
 }
 
 // handleFailure requeues a transient failure until the attempt bound is reached,

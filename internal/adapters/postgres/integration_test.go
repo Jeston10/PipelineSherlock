@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Jeston10/pipeline-sherlock/internal/application"
 	"github.com/Jeston10/pipeline-sherlock/internal/domain"
 	pgplatform "github.com/Jeston10/pipeline-sherlock/internal/platform/postgres"
 )
@@ -97,8 +98,10 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 		t.Fatalf("new pipeline: %v", err)
 	}
 	jobs := []domain.Job{{GitLabJobID: 9, Name: "test", Stage: "test", Status: "failed"}}
+	var jobIDs map[int64]string
 	for i := 0; i < 2; i++ {
-		if err := pipelines.Upsert(ctx, pl, jobs); err != nil {
+		jobIDs, err = pipelines.Upsert(ctx, pl, jobs)
+		if err != nil {
 			t.Fatalf("upsert #%d: %v", i+1, err)
 		}
 	}
@@ -111,6 +114,39 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 	}
 	if pipelineCount != 1 || jobCount != 1 {
 		t.Errorf("rows = (%d pipelines, %d jobs), want exactly 1 each after idempotent upsert", pipelineCount, jobCount)
+	}
+
+	// Record the same failure fingerprint twice: the occurrence and count must
+	// not double (idempotent on job + fingerprint).
+	fingerprints := NewFingerprintRepo(db.Pool)
+	occ := application.FingerprintOccurrence{
+		ProjectID:           stored.ID,
+		JobID:               jobIDs[9],
+		Fingerprint:         "fp-deadbeef",
+		Category:            "test_failure",
+		NormalizedSignature: "--- FAIL: TestLogin",
+		AlgorithmVersion:    1,
+		Evidence:            "--- FAIL: TestLogin\n    want 200",
+		EvidenceHash:        "evhash",
+	}
+	for i := 0; i < 2; i++ {
+		if err := fingerprints.RecordOccurrence(ctx, occ); err != nil {
+			t.Fatalf("record occurrence #%d: %v", i+1, err)
+		}
+	}
+	var fpCount, occCount, occurrenceCountCol int
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM failure_fingerprints").Scan(&fpCount); err != nil {
+		t.Fatalf("count fingerprints: %v", err)
+	}
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM failure_occurrences").Scan(&occCount); err != nil {
+		t.Fatalf("count occurrences: %v", err)
+	}
+	if err := db.Pool.QueryRow(ctx, "SELECT occurrence_count FROM failure_fingerprints LIMIT 1").Scan(&occurrenceCountCol); err != nil {
+		t.Fatalf("read occurrence_count: %v", err)
+	}
+	if fpCount != 1 || occCount != 1 || occurrenceCountCol != 1 {
+		t.Errorf("fingerprints=%d occurrences=%d occurrence_count=%d, want 1/1/1 after idempotent record",
+			fpCount, occCount, occurrenceCountCol)
 	}
 
 	// Mark processed; the inbox should then be empty.

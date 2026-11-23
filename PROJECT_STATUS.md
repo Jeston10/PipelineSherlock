@@ -97,7 +97,7 @@ Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 integration test run in CI (local gcc is 32-bit, so `-race` cannot compile
 here; no local Postgres for the integration test).
 
-## Current milestone: M2 — failure analysis 🚧 in progress
+## Milestone 2 — failure analysis ✅ complete
 
 ### Slice 1 — the deterministic analysis engine ✅ done (this slice)
 
@@ -117,15 +117,31 @@ here; no local Postgres for the integration test).
 
 Verified locally: `go build`, `go vet`, `gofmt -s`, `go test ./...` all clean.
 
-### Slice 2 — persistence & wiring (next)
+### Slice 2 — persistence & wiring ✅ done (this slice)
 
-- Plumb job ids out of `PipelineRepo.Upsert` (or a lookup) so occurrences can
-  reference the `jobs` row.
-- `FingerprintRepo`: upsert into `failure_fingerprints` (increment
-  `occurrence_count`, update `last_seen_at`) and append to
-  `failure_occurrences` with evidence.
-- Wire the engine into the worker: for failed jobs, fetch the trace, `Analyze`,
-  and persist the diagnosis. Live-DB integration coverage.
+- Migration `0004`: unique `(job_id, fingerprint_id)` on `failure_occurrences`
+  (reversible) for idempotent occurrence recording.
+- `application`: `FingerprintRepository` port + `FingerprintOccurrence`;
+  `PipelineRepository.Upsert` now returns a `gitlab_job_id → jobs.id` map;
+  `GitLabClient` gains `GetJobTrace`.
+- `adapters/postgres`: `FingerprintRepo.RecordOccurrence` (one tx: upsert
+  fingerprint, insert occurrence `ON CONFLICT DO NOTHING`, bump
+  `occurrence_count` only on a new row); `PipelineRepo.Upsert` returns job ids.
+- `application`: the processor fingerprints each failed job (fetch trace →
+  `Analyze` → `RecordOccurrence`) when a GitLab token is configured; best-effort
+  (a per-job error is logged and skipped, never failing the event). Unit-tested.
+- `cmd/server`: `FingerprintRepo` wired into the processor.
+- Live-DB integration test extended: idempotent fingerprint/occurrence recording
+  (record twice → one occurrence, count stays 1).
+
+Verified locally: `go build`, `go build -tags=integration`, `go vet`,
+`gofmt -s`, `go test ./...` all clean.
+
+## Next milestone: M3 — incidents & grouping (next)
+
+- Group recurring fingerprints into incidents (occurrence counts, first/last
+  seen); regression and flaky-test detection.
+- A read API and a dashboard to browse incidents, failures and evidence.
 
 ## Exact local run commands
 
