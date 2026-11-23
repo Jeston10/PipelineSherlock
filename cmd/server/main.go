@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	pgrepo "github.com/Jeston10/pipeline-sherlock/internal/adapters/postgres"
+	"github.com/Jeston10/pipeline-sherlock/internal/application"
 	"github.com/Jeston10/pipeline-sherlock/internal/config"
 	"github.com/Jeston10/pipeline-sherlock/internal/platform/postgres"
 	transporthttp "github.com/Jeston10/pipeline-sherlock/internal/transport/http"
@@ -79,7 +81,18 @@ func run(logger *slog.Logger) error {
 }
 
 func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
-	handler := transporthttp.NewRouter(db, logger)
+	// Repositories (adapters) and use cases (application), wired here.
+	projectRepo := pgrepo.NewProjectRepo(db.Pool)
+	eventRepo := pgrepo.NewWebhookEventRepo(db.Pool)
+	registerSvc := application.NewRegisterProjectService(projectRepo)
+	ingestSvc := application.NewIngestWebhookService(projectRepo, eventRepo)
+
+	handler := transporthttp.NewRouter(transporthttp.Deps{
+		Readiness: db,
+		Projects:  registerSvc,
+		Webhooks:  ingestSvc,
+		Logger:    logger,
+	})
 
 	srv := &nethttp.Server{
 		Addr:         cfg.HTTPAddr,

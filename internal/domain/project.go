@@ -52,6 +52,10 @@ type Project struct {
 	Name string
 	// Namespace is the GitLab group/namespace path (e.g. "team/platform").
 	Namespace string
+	// WebhookSecretHash is the hash of the project's webhook token. Empty means
+	// no secret has been set and webhook delivery must be rejected. The
+	// plaintext token is never stored on the entity.
+	WebhookSecretHash string
 	// CreatedAt is set by the persistence layer at insert time. Zero until then.
 	CreatedAt time.Time
 }
@@ -105,6 +109,16 @@ func (p Project) WithPersistence(id ProjectID, createdAt time.Time) Project {
 
 // IsPersisted reports whether the project has been assigned a stable identity.
 func (p Project) IsPersisted() bool { return p.ID != "" }
+
+// WithWebhookSecretHash returns a copy of the project carrying the given
+// webhook secret hash. The receiver is not modified.
+func (p Project) WithWebhookSecretHash(hash string) Project {
+	p.WebhookSecretHash = hash
+	return p
+}
+
+// HasWebhookSecret reports whether a webhook secret has been configured.
+func (p Project) HasWebhookSecret() bool { return p.WebhookSecretHash != "" }
 
 // validNamespace accepts GitLab-style namespace paths: one or more segments
 // separated by "/", each segment made of letters, digits, '.', '_' or '-'.

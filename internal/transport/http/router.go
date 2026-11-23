@@ -18,17 +18,23 @@ const requestIDKey contextKey = "request_id"
 // NewRouter builds the HTTP handler for the service: the route table plus the
 // middleware chain (panic recovery, request id, structured access logging).
 //
-// db is used only for the readiness check; the router takes the small
-// ReadinessChecker interface rather than a concrete type, keeping the transport
-// layer decoupled from the Postgres adapter.
-func NewRouter(db ReadinessChecker, logger *slog.Logger) http.Handler {
+// It takes small consumer-side interfaces (ReadinessChecker, ProjectService,
+// WebhookIngestor) via Deps rather than concrete types, keeping the transport
+// layer decoupled from the adapters and use cases.
+func NewRouter(deps Deps) http.Handler {
+	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 
+	api := &apiHandlers{deps: deps, logger: logger}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", LivenessHandler())
-	mux.HandleFunc("GET /readyz", ReadinessHandler(db))
+	mux.HandleFunc("GET /readyz", ReadinessHandler(deps.Readiness))
+	mux.HandleFunc("POST /api/v1/projects", api.registerProject)
+	mux.HandleFunc("GET /api/v1/projects", api.listProjects)
+	mux.HandleFunc("POST /api/v1/webhooks/gitlab", api.gitlabWebhook)
 
 	// Middleware is applied outermost-first: recovery wraps logging wraps the
 	// request-id assignment wraps the mux.

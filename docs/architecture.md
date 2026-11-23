@@ -211,6 +211,95 @@ trade-off to keep the dependency surface minimal — see
 
 ---
 
+## 7. Project registration and webhook secret **[Built: M1]**
+
+A project must be registered before PipelineSherlock will accept its webhooks.
+Registration mints a per-project secret and stores only its hash.
+
+```mermaid
+flowchart TD
+    A[POST /api/v1/projects<br/>gitlab_project_id, name, namespace] --> B[domain.NewProject<br/>validate invariants]
+    B -->|invalid| E400[400 invalid project fields]
+    B -->|valid| C[token.Generate<br/>256-bit secret]
+    C --> D[token.Hash → store hash only]
+    D --> F[ProjectRepo.Create]
+    F -->|gitlab id taken 23505| E409[409 already registered]
+    F -->|ok| G[201 Created<br/>returns webhook_secret ONCE]
+```
+
+**Walkthrough.** The handler validates the body, then the domain validates the
+project invariants. A high-entropy secret is generated; **only its SHA-256 hash
+is persisted** (`projects.webhook_secret_hash`). The plaintext secret is
+returned exactly once in the 201 response for the operator to paste into
+GitLab's webhook config — it is never stored, logged, or retrievable again, and
+`GET /api/v1/projects` never includes it. A duplicate GitLab id maps the unique
+violation (SQLSTATE 23505) to a clean 409.
+
+---
+
+## 8. Webhook ingestion: validation + durable inbox + de-duplication **[Built: M1]**
+
+The webhook endpoint authenticates the delivery, writes it to the durable inbox,
+and acknowledges fast. Processing is asynchronous (next milestone).
+
+```mermaid
+sequenceDiagram
+    participant GL as GitLab
+    participant H as Webhook handler
+    participant ING as IngestWebhook use case
+    participant PR as ProjectRepo
+    participant ER as WebhookEventRepo
+    participant DB as PostgreSQL
+
+    GL->>H: POST /api/v1/webhooks/gitlab<br/>X-Gitlab-Token, X-Gitlab-Event(-UUID), body
+    H->>H: MaxBytesReader (1 MiB) + parse project.id
+    alt missing event header / bad json / no project.id
+        H-->>GL: 400
+    else
+        H->>ING: Ingest(cmd: id, token, delivery_key, payload)
+        ING->>PR: GetByGitLabID(id)
+        alt project unknown
+            PR-->>ING: not found
+            ING-->>H: ErrProjectNotFound
+            H-->>GL: 404
+        else known
+            ING->>ING: token.Verify(stored_hash, token)
+            alt token mismatch
+                ING-->>H: ErrInvalidSignature
+                H-->>GL: 401 (does not reveal project existence)
+            else valid
+                ING->>ER: Insert(event)
+                ER->>DB: INSERT ... ON CONFLICT (project_id, delivery_key) DO NOTHING
+                alt new row
+                    DB-->>ER: rows=1
+                    ER-->>ING: inserted=true
+                    ING-->>H: Accepted
+                    H-->>GL: 202 {accepted:true}
+                else redelivery
+                    DB-->>ER: rows=0
+                    ER-->>ING: inserted=false
+                    ING-->>H: duplicate
+                    H-->>GL: 202 {duplicate:true}
+                end
+            end
+        end
+    end
+```
+
+**Walkthrough.** The body is size-bounded before anything is read. The handler
+derives a **delivery key** from GitLab's `X-Gitlab-Event-UUID` header, falling
+back to a SHA-256 of the body so identical redeliveries still collapse. The use
+case looks up the project, verifies the token against the stored hash with a
+constant-time compare, and on success writes to the inbox. **De-duplication is
+the database's job**: the unique `(project_id, delivery_key)` constraint plus
+`ON CONFLICT DO NOTHING` means a redelivered webhook is a no-op — replaying the
+same event many times still yields exactly one stored row (202 either way, with
+`accepted` vs `duplicate`). The acknowledgement is fast because the event is
+only persisted here; fetching traces and classifying happen asynchronously in a
+later milestone.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

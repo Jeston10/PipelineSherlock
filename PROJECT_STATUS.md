@@ -4,7 +4,7 @@ Living status for PipelineSherlock. Updated as milestones progress.
 
 Last updated: 2026-11-23
 
-## Current milestone: M0 — Foundation ✅ complete
+## Milestone 0 — Foundation ✅ complete
 
 ### Done
 
@@ -49,13 +49,33 @@ Last updated: 2026-11-23
   but have not been exercised end-to-end on this machine yet.
 - Frontend `npm install` / build.
 
-## Next milestone: M1 — GitLab ingestion
+## Current milestone: M1 — GitLab ingestion 🚧 in progress
 
-- Webhook receiver with signature/secret validation.
-- Durable event inbox with idempotent de-duplication (`delivery_key`).
-- GitLab API client (job metadata + traces) behind an interface, with
-  timeouts, pagination and bounded retries.
-- Background processing of inbox events.
+### Slice 1 — webhook ingestion ✅ done (this slice)
+
+- Migration `0002`: `projects.webhook_secret_hash` (reversible).
+- `platform/token`: generate 256-bit secret, SHA-256 hash, constant-time
+  verify. Unit-tested.
+- `domain`: `Project` extended with webhook secret (hash only, immutable);
+  `WebhookEvent` inbox entity with status enum + validation. Unit-tested.
+- `application`: `RegisterProject` (mints secret, stores hash, returns plaintext
+  once) and `IngestWebhook` (project lookup, token verify, idempotent inbox
+  insert) use cases, behind repository ports. Unit-tested with fakes.
+- `adapters/postgres`: `ProjectRepo` (unique-violation → already-exists) and
+  `WebhookEventRepo` (ON CONFLICT DO NOTHING → dedup).
+- `transport/http`: `POST/GET /api/v1/projects`, `POST /api/v1/webhooks/gitlab`
+  (size-bounded body, `X-Gitlab-Token` validation, delivery-key dedup,
+  202/400/401/404). Router refactored to `Deps`. Unit-tested end-to-end.
+
+Verified locally: `go build`, `go vet`, `gofmt -s`, `go test ./...` all clean.
+
+### Slice 2 — processing (next)
+
+- GitLab API client (pipeline/job metadata + traces) behind an interface, with
+  timeouts, pagination and bounded retries + jitter.
+- Background worker: claim `received` inbox events, fetch via the client, upsert
+  pipeline/job rows, mark `processed`/`failed`, with backoff.
+- Live-DB integration test exercising migrate + register + webhook + dedup.
 
 ## Exact local run commands
 

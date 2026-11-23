@@ -122,9 +122,15 @@ web/                   # React + TypeScript dashboard
   bodies, headers and query strings.
 - Readiness never echoes raw dependency errors.
 - Namespaces reject path-traversal segments (`.`/`..`).
-- **Not yet built:** GitLab ingestion, log classification, fingerprinting, the
-  dashboard beyond a health view, auth, and any benchmark claims. No performance
-  or scale numbers are claimed.
+- Webhook tokens are stored as SHA-256 hashes and verified in constant time; the
+  plaintext secret is shown only once at registration.
+- **Built (M1 slice 1):** project registration + webhook secret, the GitLab
+  webhook endpoint with token validation, and a durable, de-duplicated event
+  inbox. See the diagrams in [docs/architecture.md](docs/architecture.md) §7–§8.
+- **Not yet built:** GitLab API trace fetching, background processing of the
+  inbox, log classification, fingerprinting, the dashboard beyond a health view,
+  auth/RBAC, and any benchmark claims. No performance or scale numbers are
+  claimed.
 
 ## License
 
