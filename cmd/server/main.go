@@ -87,8 +87,10 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	eventRepo := pgrepo.NewWebhookEventRepo(db.Pool)
 	pipelineRepo := pgrepo.NewPipelineRepo(db.Pool)
 	fingerprintRepo := pgrepo.NewFingerprintRepo(db.Pool)
+	incidentRepo := pgrepo.NewIncidentRepo(db.Pool)
 	registerSvc := application.NewRegisterProjectService(projectRepo)
 	ingestSvc := application.NewIngestWebhookService(projectRepo, eventRepo)
+	incidentSvc := application.NewIncidentService(projectRepo, incidentRepo)
 
 	// The background worker reconciles inbox events against GitLab when a token
 	// is configured; otherwise it falls back to the webhook payload.
@@ -106,6 +108,7 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 		Readiness: db,
 		Projects:  registerSvc,
 		Webhooks:  ingestSvc,
+		Incidents: incidentSvc,
 		Logger:    logger,
 	})
 

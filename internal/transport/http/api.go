@@ -21,6 +21,11 @@ type WebhookIngestor interface {
 	Ingest(ctx context.Context, cmd application.IngestCommand) (application.IngestResult, error)
 }
 
+// IncidentLister is the subset of incident reads the HTTP layer needs.
+type IncidentLister interface {
+	List(ctx context.Context, gitlabProjectID int64, limit int) ([]domain.Incident, error)
+}
+
 // defaultMaxWebhookBytes bounds the size of an accepted webhook body.
 const defaultMaxWebhookBytes int64 = 1 << 20 // 1 MiB
 
@@ -29,6 +34,7 @@ type Deps struct {
 	Readiness       ReadinessChecker
 	Projects        ProjectService
 	Webhooks        WebhookIngestor
+	Incidents       IncidentLister
 	Logger          *slog.Logger
 	MaxWebhookBytes int64
 }

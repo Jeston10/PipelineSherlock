@@ -89,6 +89,13 @@ type FingerprintRepository interface {
 	RecordOccurrence(ctx context.Context, occ FingerprintOccurrence) error
 }
 
+// IncidentRepository reads grouped failure incidents.
+type IncidentRepository interface {
+	// ListByProject returns the project's incidents, most recently seen first,
+	// bounded by limit.
+	ListByProject(ctx context.Context, projectID domain.ProjectID, limit int) ([]domain.Incident, error)
+}
+
 // GitLabPipeline is the subset of a GitLab pipeline the worker reconciles.
 type GitLabPipeline struct {
 	ID         int64

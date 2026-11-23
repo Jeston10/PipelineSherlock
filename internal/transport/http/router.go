@@ -34,6 +34,7 @@ func NewRouter(deps Deps) http.Handler {
 	mux.HandleFunc("GET /readyz", ReadinessHandler(deps.Readiness))
 	mux.HandleFunc("POST /api/v1/projects", api.registerProject)
 	mux.HandleFunc("GET /api/v1/projects", api.listProjects)
+	mux.HandleFunc("GET /api/v1/projects/{gitlab_project_id}/incidents", api.listIncidents)
 	mux.HandleFunc("POST /api/v1/webhooks/gitlab", api.gitlabWebhook)
 
 	// Middleware is applied outermost-first: recovery wraps logging wraps the

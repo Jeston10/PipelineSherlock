@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-23 (M1 slice 2)
+Last updated: 2026-11-24 (M3 slice 1)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -137,11 +137,34 @@ Verified locally: `go build`, `go vet`, `gofmt -s`, `go test ./...` all clean.
 Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 `gofmt -s`, `go test ./...` all clean.
 
-## Next milestone: M3 — incidents & grouping (next)
+## Milestone 3 — incidents & grouping 🚧 in progress
 
-- Group recurring fingerprints into incidents (occurrence counts, first/last
-  seen); regression and flaky-test detection.
-- A read API and a dashboard to browse incidents, failures and evidence.
+### Slice 1 — incident read path ✅ done (this slice)
+
+- `domain`: `Incident` read-model entity (fingerprint, category, normalized
+  signature, algorithm version, occurrence count, first/last seen).
+- `application`: `IncidentRepository` port + `IncidentService.List` — resolves a
+  GitLab project id to the registered project (`ErrProjectNotFound` if unknown),
+  then lists its incidents with a clamped limit (default 50, max 200).
+  Unit-tested with fakes.
+- `adapters/postgres`: `IncidentRepo.ListByProject` reads `failure_fingerprints`
+  (one incident per fingerprint) ordered by `last_seen_at` desc, limited.
+- `transport/http`: `GET /api/v1/projects/{gitlab_project_id}/incidents`
+  (`?limit=`), behind a small `IncidentLister` interface — 200 with a JSON
+  array, 400 on an invalid id, 404 when the project is not registered.
+  Unit-tested end-to-end.
+- `cmd/server`: `IncidentRepo` + `IncidentService` wired into `Deps`.
+- Live-DB integration test extended: after recording a fingerprint, the incident
+  read model surfaces it as exactly one incident.
+
+Verified locally: `go build`, `go build -tags=integration`, `go vet`,
+`gofmt -s`, `go test ./...` all clean.
+
+### Slice 2 — incident detail & grouping (next)
+
+- Incident detail: per-occurrence history, affected refs/branches, timing.
+- Regression and flaky-test detection over the occurrence history.
+- A dashboard to browse incidents, failures and evidence.
 
 ## Exact local run commands
 

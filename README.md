@@ -6,10 +6,11 @@ fingerprinting and evidence-backed diagnosis**, not a chat interface that guesse
 at root causes.
 
 > Status: **Milestone 0 complete; Milestone 1 (GitLab ingestion) complete;
-> Milestone 2 (failure analysis) complete — the engine (slice 1) plus
-> persistence and worker wiring (slice 2).** This is an early-stage portfolio
-> project, not a production system. See [PROJECT_STATUS.md](PROJECT_STATUS.md)
-> for exactly what is built and what is next.
+> Milestone 2 (failure analysis) complete; Milestone 3 (incidents & grouping)
+> in progress — the read path that lists a project's incidents (slice 1).** This
+> is an early-stage portfolio project, not a production system. See
+> [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what is built and what is
+> next.
 
 ---
 
@@ -49,8 +50,9 @@ flowchart LR
 **Every mechanism we implement has a workflow diagram with a walkthrough in
 [docs/architecture.md](docs/architecture.md)** — system data flow, the Milestone 0
 component view, startup/shutdown sequence, config load-and-validate, the
-health/readiness request lifecycle, and the database migration flow. Design
-decisions and their trade-offs are in the [ADRs](docs/adr/).
+health/readiness request lifecycle, the database migration flow, the failure
+analysis engine, the fingerprint persistence path, and the incident read path.
+Design decisions and their trade-offs are in the [ADRs](docs/adr/).
 
 ## Tech stack
 
@@ -117,7 +119,7 @@ internal/
   adapters/gitlab/     # GitLab REST client (pagination, retries, timeouts)
   adapters/postgres/   # repository implementations (projects, inbox, pipelines)
   platform/postgres/   # pgx pool + embedded migrator
-  transport/http/      # router, middleware, health/readiness, API handlers
+  transport/http/      # router, middleware, health/readiness, API handlers (incidents)
 migrations/            # embedded, reversible SQL migrations
 tests/fixtures/        # deterministic demo/seed data
 docs/                  # architecture.md (diagrams) + adr/
@@ -152,8 +154,15 @@ web/                   # React + TypeScript dashboard
   fingerprint_id)`; count bumped only on a new occurrence). Best-effort, so a
   trace error never fails the event. Fingerprinting requires a GitLab token (it
   needs job logs). See [docs/architecture.md](docs/architecture.md) §12.
-- **Not yet built:** grouping fingerprints into incidents (regression / flaky
-  detection), a read API and the dashboard beyond a health view, GitLab MR
+- **Built (M3 slice 1):** the incident read path —
+  `GET /api/v1/projects/{gitlab_project_id}/incidents` resolves the GitLab id to
+  the registered project (clean 404 if unknown), then lists its fingerprints as
+  incidents (one per fingerprint, most-recently-seen first) with a clamped limit
+  (default 50, max 200). Each incident carries its category, normalized
+  signature and occurrence/first-seen/last-seen aggregates. See
+  [docs/architecture.md](docs/architecture.md) §13.
+- **Not yet built:** incident *detail* (per-occurrence history, affected refs,
+  regression / flaky detection), the dashboard beyond a health view, GitLab MR
   write-back, auth/RBAC, and any benchmark claims. No performance or scale
   numbers are claimed.
 

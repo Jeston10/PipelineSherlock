@@ -505,6 +505,44 @@ occurrence history is what later milestones will group into incidents.
 
 ---
 
+## 13. Incident read path: grouping fingerprints for the API **[Built: M3 slice 1]**
+
+Milestone 3 begins turning stored fingerprints into **incidents** — the
+user-facing "this failure has happened N times" unit. Slice 1 is the read path:
+list a project's incidents over the API. Incident *detail* (occurrences,
+affected refs, flaky / regression flags) is slice 2.
+
+```mermaid
+flowchart TD
+    REQ["GET /api/v1/projects/{gitlab_project_id}/incidents?limit="] --> H[listIncidents handler]
+    H --> V{valid gitlab id?}
+    V -->|no| B400[400 invalid gitlab_project_id]
+    V -->|yes| SVC[IncidentService.List]
+    SVC --> RES[ProjectRepo.GetByGitLabID]
+    RES -->|not found| B404[404 project not registered]
+    RES -->|found| CLAMP[clamp limit<br/>default 50, max 200]
+    CLAMP --> REPO["IncidentRepo.ListByProject<br/>SELECT … FROM failure_fingerprints<br/>WHERE project_id = $1<br/>ORDER BY last_seen_at DESC LIMIT $2"]
+    REPO --> OUT[200 incidentResponse array:<br/>fingerprint, category, signature,<br/>occurrence_count, first/last seen]
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class REQ,H,SVC,RES,CLAMP,REPO,OUT built;
+```
+
+**Walkthrough.** The endpoint is keyed by the **GitLab** project id (what a
+GitLab user knows), not the internal UUID. The handler validates the id and
+reads an optional `limit`, then the `IncidentService` resolves the GitLab id to
+the registered project — returning a clean 404 if it was never registered —
+before querying. Each `failure_fingerprints` row already carries its aggregate
+(`occurrence_count`, `first_seen_at`, `last_seen_at`), which the earlier
+recording step maintains, so grouping is a simple ordered read rather than an
+expensive scan of `failure_occurrences`: **one incident per fingerprint**, most
+recently seen first. The list size is clamped (default 50, max 200) so a caller
+can't ask for an unbounded result. The transport layer depends only on a small
+`IncidentLister` interface, keeping it decoupled from the use case and adapter —
+the same ports-and-adapters boundary used throughout.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

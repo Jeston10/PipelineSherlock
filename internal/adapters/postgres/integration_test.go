@@ -149,6 +149,19 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 			fpCount, occCount, occurrenceCountCol)
 	}
 
+	// The incident read model should surface that fingerprint as one incident.
+	incidentRepo := NewIncidentRepo(db.Pool)
+	incs, err := incidentRepo.ListByProject(ctx, stored.ID, 50)
+	if err != nil {
+		t.Fatalf("list incidents: %v", err)
+	}
+	if len(incs) != 1 {
+		t.Fatalf("incidents = %d, want 1", len(incs))
+	}
+	if incs[0].Fingerprint != "fp-deadbeef" || incs[0].Category != "test_failure" || incs[0].OccurrenceCount != 1 {
+		t.Errorf("incident = %+v, want fp-deadbeef/test_failure/count 1", incs[0])
+	}
+
 	// Mark processed; the inbox should then be empty.
 	if err := events.MarkProcessed(ctx, claimed.ID); err != nil {
 		t.Fatalf("mark processed: %v", err)
