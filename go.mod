@@ -1,4 +1,4 @@
-module github.com/sjeston/pipeline-sherlock
+module github.com/Jeston10/pipeline-sherlock
 
 go 1.27.0
 

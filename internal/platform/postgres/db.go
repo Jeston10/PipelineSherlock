@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/sjeston/pipeline-sherlock/migrations"
+	"github.com/Jeston10/pipeline-sherlock/migrations"
 )
 
 // DB wraps a pgx connection pool. It is safe for concurrent use.

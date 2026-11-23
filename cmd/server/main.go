@@ -19,9 +19,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sjeston/pipeline-sherlock/internal/config"
-	"github.com/sjeston/pipeline-sherlock/internal/platform/postgres"
-	transporthttp "github.com/sjeston/pipeline-sherlock/internal/transport/http"
+	"github.com/Jeston10/pipeline-sherlock/internal/config"
+	"github.com/Jeston10/pipeline-sherlock/internal/platform/postgres"
+	transporthttp "github.com/Jeston10/pipeline-sherlock/internal/transport/http"
 )
 
 func main() {
