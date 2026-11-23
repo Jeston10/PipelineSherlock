@@ -1,0 +1,23 @@
+# Binaries
+/bin/
+/out/
+*.exe
+*.test
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Go
+/vendor/
+
+# Node / frontend
+web/node_modules/
+web/dist/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.log

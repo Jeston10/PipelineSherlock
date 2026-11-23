@@ -1,0 +1,220 @@
+# PipelineSherlock — Architecture
+
+This document explains how PipelineSherlock is put together and, for every
+mechanism we implement, gives a workflow diagram with a short walkthrough.
+Diagrams use [Mermaid](https://mermaid.js.org/) and render directly on GitHub.
+
+Each diagram is labelled **[Built: M0]** (implemented in Milestone 0) or
+**[Planned]** (part of the target design, not yet built). This keeps the
+document honest about what exists today versus the roadmap.
+
+---
+
+## 1. System context and end-to-end data flow **[Planned target, M0 subset built]**
+
+The target system turns noisy GitLab CI failures into searchable, deterministic
+failure incidents. The diagram below is the whole pipeline; the shaded path is
+what Milestone 0 establishes (configuration, HTTP surface, database, health).
+
+```mermaid
+flowchart LR
+    GL[GitLab<br/>pipeline + job events] -->|webhook| WR[Webhook Receiver]
+    WR -->|validate signature| INBOX[(webhook_events<br/>durable inbox)]
+    INBOX --> WORKER[Background Worker]
+    WORKER -->|fetch traces| GLAPI[GitLab API client]
+    WORKER --> NORM[Log Normalizer]
+    NORM --> CLS[Rule-based Classifier]
+    CLS --> FP[Fingerprint Generator]
+    FP --> GRP[Incident Grouper]
+    GRP --> PG[(PostgreSQL<br/>source of truth)]
+    REDIS[(Redis<br/>dedup / queues)] -.optional.- WORKER
+    UI[React + TS dashboard] -->|REST| API[Go REST API]
+    API --> PG
+
+    subgraph M0[Milestone 0 — built]
+        API
+        PG
+        HEALTH[Health & readiness]
+    end
+    API --- HEALTH
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class API,PG,HEALTH built;
+```
+
+**Walkthrough.** GitLab sends pipeline/job events to a webhook receiver, which
+validates them and writes them to a durable inbox (`webhook_events`) before
+acknowledging — so acknowledgement is fast and processing can be retried safely.
+A background worker pulls from the inbox, fetches job traces via the GitLab API,
+normalizes the logs, classifies the failure, generates a deterministic
+fingerprint, and groups recurring failures into incidents. PostgreSQL is the
+source of truth; Redis is optional and only used where it earns its place. The
+React dashboard reads everything through the Go REST API. **Milestone 0 builds
+the spine of this picture: configuration, the HTTP service, the database and the
+health/readiness surface** — the ingestion and analysis stages arrive in later
+milestones.
+
+---
+
+## 2. Milestone 0 component view **[Built: M0]**
+
+```mermaid
+flowchart TB
+    subgraph cmd[cmd/server]
+        MAIN[main.go<br/>wire + lifecycle]
+    end
+    subgraph internal[internal]
+        CFG[config<br/>load + validate]
+        DOM[domain<br/>Project entity + invariants]
+        TR[transport/http<br/>router + middleware + health]
+        PGADP[platform/postgres<br/>pool + migrator]
+    end
+    MIG[(migrations<br/>embedded *.sql)]
+    DB[(PostgreSQL)]
+
+    MAIN --> CFG
+    MAIN --> PGADP
+    MAIN --> TR
+    TR -->|ReadinessChecker iface| PGADP
+    PGADP --> MIG
+    PGADP --> DB
+    TR -. uses .-> DOM
+```
+
+**Walkthrough.** `main.go` is the only place that wires concrete types together.
+`config` is loaded and validated first. The `postgres` adapter owns the
+connection pool and the embedded migrator. The `transport/http` layer depends on
+the database only through the small `ReadinessChecker` interface it defines
+itself (`Ping(ctx) error`), so the transport layer never imports the Postgres
+package directly — this is the ports-and-adapters boundary that keeps business
+logic independent of infrastructure. The `domain` package holds entities and
+rules and imports nothing from the outer layers.
+
+---
+
+## 3. Startup and graceful shutdown sequence **[Built: M0]**
+
+```mermaid
+sequenceDiagram
+    participant OS
+    participant main
+    participant config
+    participant postgres
+    participant http as HTTP server
+
+    OS->>main: start process
+    main->>config: Load(os.Getenv)
+    alt invalid config
+        config-->>main: aggregated error
+        main-->>OS: exit(1) (fail fast)
+    else valid
+        config-->>main: Config
+    end
+    main->>postgres: Connect(ctx, DATABASE_URL) + Ping
+    alt connect fails
+        postgres-->>main: error
+        main-->>OS: exit(1)
+    else connected
+        main->>postgres: Migrate(ctx) (apply pending)
+        main->>http: ListenAndServe(addr)
+        OS-->>main: SIGINT / SIGTERM
+        main->>http: Shutdown(ctx, ShutdownTimeout)
+        http-->>main: drained
+        main->>postgres: Close()
+        main-->>OS: exit(0)
+    end
+```
+
+**Walkthrough.** Startup is strictly ordered and fails fast: bad configuration
+or an unreachable database stops the process with a non-zero exit before any
+traffic is served. On `serve`, pending migrations are applied, then the HTTP
+server starts. A SIGINT/SIGTERM triggers a bounded graceful shutdown
+(`ShutdownTimeout`) that drains in-flight requests before closing the pool.
+
+---
+
+## 4. Configuration load-and-validate flow **[Built: M0]**
+
+```mermaid
+flowchart TD
+    A[Load getenv] --> B[Read vars with defaults]
+    B --> C{Parse durations}
+    C -->|unparseable| E[Return error]
+    C -->|ok| D[validate: aggregate problems]
+    D --> F{Any problems?}
+    F -->|yes| E
+    F -->|no| G[Return immutable Config]
+    G --> H[Log Config.Redacted<br/>credentials stripped]
+```
+
+**Walkthrough.** Configuration is read once through an injectable `getenv`
+function (so tests never touch the real environment). Every problem — a missing
+`DATABASE_URL`, an unparseable duration — is aggregated so one run reports all of
+them. Only a fully valid, immutable `Config` is returned. Startup logging uses
+`Config.Redacted()`, which strips credentials from connection strings so secrets
+never reach the logs.
+
+---
+
+## 5. Health vs readiness request lifecycle **[Built: M0]**
+
+```mermaid
+flowchart TD
+    subgraph mw[Middleware chain]
+        R[recover] --> L[access log] --> ID[request-id]
+    end
+    ID --> MUX{route}
+    MUX -->|GET /healthz| LIVE[Liveness: always 200]
+    MUX -->|GET /readyz| READY[Readiness]
+    READY --> PING{db.Ping ctx}
+    PING -->|ok| OK[200 status: ok<br/>checks.database: ok]
+    PING -->|error| DOWN[503 status: unavailable<br/>checks.database: unavailable]
+```
+
+**Walkthrough.** Every request passes through panic recovery, structured access
+logging (method, path, status, duration, request id — never bodies or headers,
+which may carry secrets) and request-id assignment. `/healthz` is liveness: it
+always returns 200 so a failing liveness probe means "restart me", not "a
+dependency is down". `/readyz` is readiness: it pings the database and returns
+503 when the dependency is unavailable, so load balancers stop routing to the
+instance. Readiness never echoes the raw dependency error (which can carry host
+or credential detail) — only a coarse `ok` / `unavailable` marker.
+
+---
+
+## 6. Database migration flow **[Built: M0]**
+
+```mermaid
+flowchart TD
+    A[Migrate ctx, db] --> B[CREATE TABLE IF NOT EXISTS schema_migrations]
+    B --> C[SELECT applied versions]
+    C --> D[loadMigrations from embedded FS<br/>pair .up/.down, sort by version]
+    D --> E{Next migration}
+    E -->|already applied| E
+    E -->|pending| F[BEGIN tx]
+    F --> G[exec up SQL]
+    G --> H[INSERT version into schema_migrations]
+    H --> I{ok?}
+    I -->|yes| J[COMMIT] --> E
+    I -->|no| K[ROLLBACK + return error]
+    E -->|none left| Z[done]
+```
+
+**Walkthrough.** Migrations are embedded in the binary. The migrator ensures a
+`schema_migrations` ledger, reads the already-applied versions, and applies each
+pending `*.up.sql` in version order. Each migration and its ledger insert run in
+a **single transaction**, so a failure leaves the schema untouched and the run
+can be retried. `rollback` applies the matching `*.down.sql` for the latest
+applied version. This small in-house migrator is a deliberate Milestone 0
+trade-off to keep the dependency surface minimal — see
+[ADR 0004](adr/0004-minimal-migrator.md).
+
+---
+
+## Related documents
+
+- [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)
+- [ADR 0002 — Modular monolith](adr/0002-modular-monolith.md)
+- [ADR 0003 — Go / React / PostgreSQL stack](adr/0003-tech-stack.md)
+- [ADR 0004 — Minimal in-house migrator for M0](adr/0004-minimal-migrator.md)
+- [PROJECT_STATUS.md](../PROJECT_STATUS.md) — what is done, what is next
