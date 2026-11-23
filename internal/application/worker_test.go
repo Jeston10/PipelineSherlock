@@ -34,20 +34,20 @@ func TestWorker_DrainsThenStops(t *testing.T) {
 	// Wait until both events are processed.
 	deadline := time.After(2 * time.Second)
 	for {
-		if events.events[0].Status == domain.WebhookStatusProcessed &&
-			events.events[1].Status == domain.WebhookStatusProcessed {
+		if events.statusAt(0) == domain.WebhookStatusProcessed &&
+			events.statusAt(1) == domain.WebhookStatusProcessed {
 			break
 		}
 		select {
 		case <-deadline:
 			t.Fatalf("events not processed in time: %q, %q",
-				events.events[0].Status, events.events[1].Status)
+				events.statusAt(0), events.statusAt(1))
 		case <-time.After(time.Millisecond):
 		}
 	}
 
-	if len(pipelines.upserts) != 2 {
-		t.Errorf("upserts = %d, want 2", len(pipelines.upserts))
+	if n := pipelines.count(); n != 2 {
+		t.Errorf("upserts = %d, want 2", n)
 	}
 
 	cancel()

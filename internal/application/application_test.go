@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,8 +46,10 @@ func (r *fakeProjectRepo) List(_ context.Context) ([]domain.Project, error) {
 }
 
 // fakeEventRepo is an in-memory WebhookEventRepository supporting the full
-// inbox lifecycle (idempotent insert, claim, and status transitions).
+// inbox lifecycle (idempotent insert, claim, and status transitions). It is
+// guarded by a mutex because the worker drives it from a separate goroutine.
 type fakeEventRepo struct {
+	mu     sync.Mutex
 	keys   map[string]bool
 	events []*domain.WebhookEvent
 	nextID int
@@ -57,6 +60,8 @@ func newFakeEventRepo() *fakeEventRepo {
 }
 
 func (r *fakeEventRepo) Insert(_ context.Context, ev domain.WebhookEvent) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	key := string(ev.ProjectID) + "|" + ev.DeliveryKey
 	if r.keys[key] {
 		return false, nil
@@ -71,6 +76,8 @@ func (r *fakeEventRepo) Insert(_ context.Context, ev domain.WebhookEvent) (bool,
 }
 
 func (r *fakeEventRepo) ClaimNext(_ context.Context) (domain.WebhookEvent, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, e := range r.events {
 		if e.Status == domain.WebhookStatusReceived {
 			e.Status = domain.WebhookStatusProcessing
@@ -81,6 +88,7 @@ func (r *fakeEventRepo) ClaimNext(_ context.Context) (domain.WebhookEvent, bool,
 	return domain.WebhookEvent{}, false, nil
 }
 
+// find locates an event by id. Callers must hold r.mu.
 func (r *fakeEventRepo) find(id string) *domain.WebhookEvent {
 	for _, e := range r.events {
 		if e.ID == id {
@@ -91,6 +99,8 @@ func (r *fakeEventRepo) find(id string) *domain.WebhookEvent {
 }
 
 func (r *fakeEventRepo) MarkProcessed(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if e := r.find(id); e != nil {
 		e.Status = domain.WebhookStatusProcessed
 	}
@@ -98,6 +108,8 @@ func (r *fakeEventRepo) MarkProcessed(_ context.Context, id string) error {
 }
 
 func (r *fakeEventRepo) Requeue(_ context.Context, id, code string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if e := r.find(id); e != nil {
 		e.Status = domain.WebhookStatusReceived
 		e.ErrorCode = code
@@ -106,11 +118,21 @@ func (r *fakeEventRepo) Requeue(_ context.Context, id, code string) error {
 }
 
 func (r *fakeEventRepo) MarkFailed(_ context.Context, id, code string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if e := r.find(id); e != nil {
 		e.Status = domain.WebhookStatusFailed
 		e.ErrorCode = code
 	}
 	return nil
+}
+
+// statusAt returns the status of the i-th inserted event under the lock, for
+// tests that observe the repo while a worker goroutine mutates it.
+func (r *fakeEventRepo) statusAt(i int) domain.WebhookEventStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.events[i].Status
 }
 
 func TestRegisterProject_StoresHashNotPlaintext(t *testing.T) {

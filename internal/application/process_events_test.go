@@ -3,13 +3,16 @@ package application
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/Jeston10/pipeline-sherlock/internal/domain"
 )
 
-// fakePipelineRepo records upserts and can be made to fail.
+// fakePipelineRepo records upserts and can be made to fail. It is mutex-guarded
+// because the worker calls Upsert from a separate goroutine.
 type fakePipelineRepo struct {
+	mu      sync.Mutex
 	upserts []upsertCall
 	err     error
 }
@@ -20,11 +23,20 @@ type upsertCall struct {
 }
 
 func (r *fakePipelineRepo) Upsert(_ context.Context, p domain.Pipeline, jobs []domain.Job) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.err != nil {
 		return r.err
 	}
 	r.upserts = append(r.upserts, upsertCall{pipeline: p, jobs: jobs})
 	return nil
+}
+
+// count returns the number of recorded upserts under the lock.
+func (r *fakePipelineRepo) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.upserts)
 }
 
 // fakeGitLabClient returns programmed authoritative state.
