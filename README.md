@@ -5,10 +5,11 @@ searchable, explainable failure incidents. The differentiator is **deterministic
 fingerprinting and evidence-backed diagnosis**, not a chat interface that guesses
 at root causes.
 
-> Status: **Milestone 0 complete; Milestone 1 (GitLab ingestion) in progress —
-> slices 1 & 2 done.** This is an early-stage portfolio project, not a production
-> system. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what is built and
-> what is next.
+> Status: **Milestone 0 complete; Milestone 1 (GitLab ingestion) complete
+> (slices 1 & 2); Milestone 2 (failure analysis) in progress — slice 1 (the
+> deterministic analysis engine) done.** This is an early-stage portfolio
+> project, not a production system. See [PROJECT_STATUS.md](PROJECT_STATUS.md)
+> for exactly what is built and what is next.
 
 ---
 
@@ -111,6 +112,7 @@ cmd/server/            # entry point: wiring + lifecycle (+ background worker)
 internal/
   config/              # env config, fail-fast validation
   domain/              # core entities + invariants (Project, Pipeline, Job, WebhookEvent)
+  analysis/            # pure failure analysis: normalize, classify, fingerprint
   application/         # use cases + ports (register, ingest, process, worker)
   adapters/gitlab/     # GitLab REST client (pagination, retries, timeouts)
   adapters/postgres/   # repository implementations (projects, inbox, pipelines)
@@ -139,10 +141,15 @@ web/                   # React + TypeScript dashboard
   idempotently upserts `pipelines`/`jobs`, and bounds retries with requeue/fail.
   The GitLab REST client handles pagination, per-request timeouts and retries
   with jitter. See [docs/architecture.md](docs/architecture.md) §9–§10.
-- **Not yet built:** GitLab job *trace* fetching, log normalization and
-  classification, deterministic fingerprinting and incident grouping, the
-  dashboard beyond a health view, auth/RBAC, and any benchmark claims. No
-  performance or scale numbers are claimed.
+- **Built (M2 slice 1):** the deterministic failure-analysis engine — log
+  normalization, a priority-ordered rule-based classifier, and stable
+  SHA-256 fingerprinting (`internal/analysis`), plus GitLab job *trace*
+  fetching. Pure and fully unit-tested. See
+  [docs/architecture.md](docs/architecture.md) §11.
+- **Not yet built:** persisting diagnoses into `failure_fingerprints` /
+  `failure_occurrences` and wiring the engine into the worker (M2 slice 2),
+  incident grouping, the dashboard beyond a health view, auth/RBAC, and any
+  benchmark claims. No performance or scale numbers are claimed.
 
 ## License
 

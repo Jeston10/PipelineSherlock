@@ -156,6 +156,19 @@ func (c *Client) ListPipelineJobs(ctx context.Context, gitlabProjectID, pipeline
 // getJSON performs a GET with retries and decodes a 2xx body into out. It
 // returns the response headers so callers can read pagination markers.
 func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out any) (http.Header, error) {
+	body, headers, err := c.doGet(ctx, path, query, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return nil, fmt.Errorf("decode gitlab response: %w", err)
+	}
+	return headers, nil
+}
+
+// doGet performs a GET with the shared retry/backoff policy and returns the raw
+// 2xx body and headers. accept sets the Accept header (JSON or text/plain).
+func (c *Client) doGet(ctx context.Context, path string, query url.Values, accept string) ([]byte, http.Header, error) {
 	full := c.baseURL + path
 	if len(query) > 0 {
 		full += "?" + query.Encode()
@@ -165,16 +178,16 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
 			if err := sleepCtx(ctx, c.backoff(attempt)); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
 		if err != nil {
-			return nil, fmt.Errorf("build request: %w", err)
+			return nil, nil, fmt.Errorf("build request: %w", err)
 		}
 		req.Header.Set(tokenHeader, c.token)
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept", accept)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -189,19 +202,27 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out
 		}
 
 		if status >= 200 && status < 300 {
-			if err := json.Unmarshal(body, out); err != nil {
-				return nil, fmt.Errorf("decode gitlab response: %w", err)
-			}
-			return headers, nil
+			return body, headers, nil
 		}
 		if retryableStatus(status) {
 			lastErr = fmt.Errorf("gitlab status %d", status)
 			continue
 		}
 		// Non-retryable (e.g. 401, 403, 404).
-		return nil, fmt.Errorf("gitlab status %d for %s", status, path)
+		return nil, nil, fmt.Errorf("gitlab status %d for %s", status, path)
 	}
-	return nil, fmt.Errorf("gitlab request failed after %d attempts: %w", c.maxRetries+1, lastErr)
+	return nil, nil, fmt.Errorf("gitlab request failed after %d attempts: %w", c.maxRetries+1, lastErr)
+}
+
+// GetJobTrace fetches the raw log (trace) for a job. GitLab returns plain text,
+// not JSON. An empty trace is valid (a job may have produced no output).
+func (c *Client) GetJobTrace(ctx context.Context, gitlabProjectID, jobID int64) (string, error) {
+	path := fmt.Sprintf("/api/v4/projects/%d/jobs/%d/trace", gitlabProjectID, jobID)
+	body, _, err := c.doGet(ctx, path, nil, "text/plain")
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 // drain reads and closes the response body.

@@ -101,6 +101,52 @@ func TestGetPipeline_RetriesOn5xx(t *testing.T) {
 	}
 }
 
+func TestGetJobTrace(t *testing.T) {
+	var gotPath string
+	const trace = "Running with gitlab-runner\n--- FAIL: TestLogin (0.01s)\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, trace)
+	}))
+	defer server.Close()
+
+	got, err := testClient(server).GetJobTrace(context.Background(), 1001, 9)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/v4/projects/1001/jobs/9/trace" {
+		t.Errorf("path = %q, want the job trace endpoint", gotPath)
+	}
+	if got != trace {
+		t.Errorf("trace = %q, want %q", got, trace)
+	}
+}
+
+func TestGetJobTrace_RetriesOn5xx(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 2 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		fmt.Fprint(w, "ok trace")
+	}))
+	defer server.Close()
+
+	got, err := testClient(server).GetJobTrace(context.Background(), 1001, 9)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2 (one failure then success)", calls)
+	}
+	if got != "ok trace" {
+		t.Errorf("trace = %q, want %q", got, "ok trace")
+	}
+}
+
 func TestGetPipeline_NonRetryableError(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

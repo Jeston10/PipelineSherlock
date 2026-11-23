@@ -49,7 +49,7 @@ Last updated: 2026-11-23 (M1 slice 2)
   but have not been exercised end-to-end on this machine yet.
 - Frontend `npm install` / build.
 
-## Current milestone: M1 — GitLab ingestion 🚧 in progress
+## Milestone 1 — GitLab ingestion ✅ complete
 
 ### Slice 1 — webhook ingestion ✅ done (this slice)
 
@@ -97,10 +97,35 @@ Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 integration test run in CI (local gcc is 32-bit, so `-race` cannot compile
 here; no local Postgres for the integration test).
 
-### Slice 3 — analysis (next)
+## Current milestone: M2 — failure analysis 🚧 in progress
 
-- Job trace fetching, log normalization and rule-based classification.
-- Deterministic failure fingerprinting and incident grouping.
+### Slice 1 — the deterministic analysis engine ✅ done (this slice)
+
+- `internal/analysis` (pure, no I/O / clock / randomness):
+  - `Normalize` — strips ANSI and replaces volatile tokens (timestamps,
+    durations, hashes, addresses, numbers) with placeholders; idempotent.
+  - `Classify` — priority-ordered rule-based classifier (oom, timeout, infra,
+    dependency, compile, lint, test, unknown), returning the salient signature
+    line and a human-readable evidence excerpt. Root cause beats symptom.
+  - `Fingerprint` / `Analyze` — stable SHA-256 over
+    (project ∥ category ∥ normalized signature ∥ algorithm version) with a
+    field separator; `Analyze` is the entry point returning a full `Diagnosis`.
+  - Unit-tested, including the convergence property (same failure across runs →
+    one fingerprint) and distinctness.
+- `adapters/gitlab`: `GetJobTrace` (raw text endpoint) added, sharing the retry
+  core; unit-tested against `httptest`.
+
+Verified locally: `go build`, `go vet`, `gofmt -s`, `go test ./...` all clean.
+
+### Slice 2 — persistence & wiring (next)
+
+- Plumb job ids out of `PipelineRepo.Upsert` (or a lookup) so occurrences can
+  reference the `jobs` row.
+- `FingerprintRepo`: upsert into `failure_fingerprints` (increment
+  `occurrence_count`, update `last_seen_at`) and append to
+  `failure_occurrences` with evidence.
+- Wire the engine into the worker: for failed jobs, fetch the trace, `Analyze`,
+  and persist the diagnosis. Live-DB integration coverage.
 
 ## Exact local run commands
 

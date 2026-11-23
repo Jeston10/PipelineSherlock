@@ -401,6 +401,53 @@ application layer as `GitLabPipeline` / `GitLabJob`.
 
 ---
 
+## 11. Deterministic failure analysis: normalize → classify → fingerprint **[Built: M2 slice 1 — engine; persistence & wiring Planned]**
+
+This is the project's differentiator. A failed job's log is reduced to a stable
+**fingerprint** so that the *same* failure recurring across branches, runs and
+time collapses to one identity — without any model guessing. The engine is pure
+(no I/O, no clock, no randomness), which is what makes it reproducible and
+testable. Fetching the trace is built; persisting diagnoses into
+`failure_fingerprints` / `failure_occurrences` and calling the engine from the
+worker arrive in M2 slice 2.
+
+```mermaid
+flowchart TD
+    TRACE["raw job trace<br/>(GitLab client GetJobTrace — Built)"] --> CLS[Classify]
+    subgraph CLSS[Classify: first matching rule by priority]
+        R1[oom] --> R2[timeout] --> R3[infra] --> R4[dependency]
+        R4 --> R5[compile] --> R6[lint] --> R7[test] --> R8[unknown: last line]
+    end
+    CLS --> PICK[category + signature line + evidence excerpt]
+    PICK --> NORM["Normalize signature line<br/>strip ANSI; timestamps/durations/<br/>hashes/addresses/numbers → placeholders"]
+    NORM --> FP["Fingerprint = SHA-256(<br/>project ∥ category ∥ signature ∥ vN)"]
+    FP --> DIAG[Diagnosis:<br/>category, normalized_signature,<br/>fingerprint, evidence, evidence_hash]
+    DIAG -.Planned.-> STORE[(failure_fingerprints<br/>+ failure_occurrences)]
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class TRACE,CLS,PICK,NORM,FP,DIAG built;
+```
+
+**Walkthrough.** The raw trace is first **classified** by scanning its lines
+against an ordered rule set. Priority matters: environmental root causes (OOM,
+timeout, infra) are checked before build and test symptoms, because a failing
+test is often downstream of the real cause — so an out-of-memory run that also
+prints `--- FAIL` is categorized as `oom`, not `test_failure`. The classifier
+returns the single most salient line (the **signature line**) plus a short
+human-readable **evidence** excerpt. The signature line is then **normalized**:
+ANSI colour codes are stripped and every volatile token — timestamps, durations,
+hashes, hex addresses, bare numbers — is replaced with a placeholder, so two
+runs of the same failure that differ only in those tokens produce an identical
+signature. Finally the **fingerprint** is a SHA-256 over the project id,
+category, normalized signature and an `algorithm_version`, with a separator
+between fields so adjacent fields cannot collide. The version lets the scheme
+change later without clashing with old fingerprints. The result is a
+`Diagnosis` carrying everything the next slice needs to upsert into
+`failure_fingerprints` (incrementing an occurrence count) and append to
+`failure_occurrences` with the evidence attached.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)
