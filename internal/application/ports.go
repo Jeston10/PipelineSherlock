@@ -18,6 +18,9 @@ var (
 	ErrProjectAlreadyExists = errors.New("project already exists")
 	// ErrProjectNotFound is returned when no project matches a lookup.
 	ErrProjectNotFound = errors.New("project not found")
+	// ErrIncidentNotFound is returned when no incident matches a fingerprint
+	// within a project.
+	ErrIncidentNotFound = errors.New("incident not found")
 )
 
 // ProjectRepository persists and retrieves projects.
@@ -94,6 +97,15 @@ type IncidentRepository interface {
 	// ListByProject returns the project's incidents, most recently seen first,
 	// bounded by limit.
 	ListByProject(ctx context.Context, projectID domain.ProjectID, limit int) ([]domain.Incident, error)
+
+	// GetByFingerprint returns a single incident header by its fingerprint
+	// within the project. found is false (nil error) when no such incident
+	// exists.
+	GetByFingerprint(ctx context.Context, projectID domain.ProjectID, fingerprint string) (incident domain.Incident, found bool, err error)
+
+	// ListOccurrences returns the enriched occurrence history for a fingerprint
+	// (joined to its job and pipeline), most recent first, bounded by limit.
+	ListOccurrences(ctx context.Context, fingerprintID string, limit int) ([]domain.IncidentOccurrence, error)
 }
 
 // GitLabPipeline is the subset of a GitLab pipeline the worker reconciles.

@@ -543,6 +543,60 @@ the same ports-and-adapters boundary used throughout.
 
 ---
 
+## 14. Incident detail: occurrence history & heuristic signals **[Built: M3 slice 2]**
+
+Slice 2 completes the incident view. Where the list (slice 1) answers "which
+failures are happening", the detail endpoint answers "what is the shape of this
+one failure" — its occurrence history enriched with the pipeline/job context,
+a per-ref breakdown, and two heuristic signals (flaky / regression candidates).
+
+```mermaid
+flowchart TD
+    REQ["GET /api/v1/projects/{gitlab_project_id}/incidents/{fingerprint}?limit="] --> H[getIncident handler]
+    H --> V{valid id &<br/>non-empty fingerprint?}
+    V -->|no| B400[400 invalid request]
+    V -->|yes| SVC[IncidentService.Detail]
+    SVC --> RES[ProjectRepo.GetByGitLabID]
+    RES -->|not found| B404P[404 project not registered]
+    RES -->|found| GET[IncidentRepo.GetByFingerprint]
+    GET -->|not found| B404I[404 incident not found]
+    GET -->|found| OCC["IncidentRepo.ListOccurrences<br/>occurrences join jobs join pipelines<br/>ORDER BY observed_at DESC LIMIT n"]
+    OCC --> PURE["domain.AnalyzeIncident (pure)<br/>· affected-ref breakdown<br/>· flaky / regression signals"]
+    PURE --> OUT[200 incidentDetailResponse:<br/>header + occurrences +<br/>affected_refs + signals]
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class REQ,H,SVC,RES,GET,OCC,PURE,OUT built;
+```
+
+**Walkthrough.** The handler validates the GitLab id and the fingerprint, then
+`IncidentService.Detail` resolves the project (404 if unregistered), loads the
+fingerprint header (404 if the project has no such fingerprint), and reads the
+occurrence history. `ListOccurrences` joins each `failure_occurrences` row to
+its `jobs` row and then its `pipelines` row, so every occurrence carries the
+`ref`, `sha`, job name, stage and GitLab ids it was seen in — the evidence a
+human needs to judge the failure. The list is clamped (default 100, max 500).
+
+**Deterministic signals, honestly scoped.** `domain.AnalyzeIncident` is a pure
+function over the occurrence list — no clock, no I/O — so the same history
+always yields the same breakdown and the same flags. Two signals are derived:
+
+- **`flaky_suspected`** — some single commit (`sha`) produced this failure in
+  **more than one** pipeline run. The same input failing not-every-time is a
+  classic nondeterminism signal.
+- **`regression_suspected`** — the failure recurs across **two or more distinct
+  commits**, i.e. it persists as the branch moves forward rather than being a
+  one-off.
+
+These are deliberately framed as *candidates for review*, not verdicts. The
+system records only failures, not successes, so it cannot yet prove a test
+passed-then-failed on the same commit; the signals describe the shape of the
+failure history and the response exposes the raw counts
+(`distinct_refs`, `distinct_shas`) so a reader can judge for themselves. This
+keeps the feature within the project's "evidence-backed, not guessing" promise.
+Richer detection (using success data and timing) is future work.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

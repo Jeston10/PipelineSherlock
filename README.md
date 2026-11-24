@@ -7,10 +7,11 @@ at root causes.
 
 > Status: **Milestone 0 complete; Milestone 1 (GitLab ingestion) complete;
 > Milestone 2 (failure analysis) complete; Milestone 3 (incidents & grouping)
-> in progress — the read path that lists a project's incidents (slice 1).** This
-> is an early-stage portfolio project, not a production system. See
-> [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what is built and what is
-> next.
+> complete — the read path that lists a project's incidents (slice 1) and the
+> incident detail view with occurrence history and heuristic flaky/regression
+> signals (slice 2).** This is an early-stage portfolio project, not a
+> production system. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly
+> what is built and what is next.
 
 ---
 
@@ -161,10 +162,18 @@ web/                   # React + TypeScript dashboard
   (default 50, max 200). Each incident carries its category, normalized
   signature and occurrence/first-seen/last-seen aggregates. See
   [docs/architecture.md](docs/architecture.md) §13.
-- **Not yet built:** incident *detail* (per-occurrence history, affected refs,
-  regression / flaky detection), the dashboard beyond a health view, GitLab MR
-  write-back, auth/RBAC, and any benchmark claims. No performance or scale
-  numbers are claimed.
+- **Built (M3 slice 2):** the incident detail view —
+  `GET /api/v1/projects/{gitlab_project_id}/incidents/{fingerprint}` returns the
+  incident with its occurrence history (each joined to its job and pipeline for
+  ref, sha, stage and GitLab ids), a per-ref breakdown, and two deterministic
+  heuristic signals: `flaky_suspected` (same commit failed in more than one run)
+  and `regression_suspected` (failure recurs across multiple commits). The
+  signal logic is a pure, fully unit-tested domain function and is framed as
+  *candidates for review*, not verdicts. See
+  [docs/architecture.md](docs/architecture.md) §14.
+- **Not yet built:** richer flaky/regression detection using success data and
+  timing, the dashboard beyond a health view, GitLab MR write-back, auth/RBAC,
+  and any benchmark claims. No performance or scale numbers are claimed.
 
 ## License
 

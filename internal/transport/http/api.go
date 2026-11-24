@@ -24,6 +24,7 @@ type WebhookIngestor interface {
 // IncidentLister is the subset of incident reads the HTTP layer needs.
 type IncidentLister interface {
 	List(ctx context.Context, gitlabProjectID int64, limit int) ([]domain.Incident, error)
+	Detail(ctx context.Context, gitlabProjectID int64, fingerprint string, limit int) (domain.IncidentDetail, error)
 }
 
 // defaultMaxWebhookBytes bounds the size of an accepted webhook body.

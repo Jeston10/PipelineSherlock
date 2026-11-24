@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-24 (M3 slice 1)
+Last updated: 2026-11-24 (M3 slice 2)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -137,7 +137,7 @@ Verified locally: `go build`, `go vet`, `gofmt -s`, `go test ./...` all clean.
 Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 `gofmt -s`, `go test ./...` all clean.
 
-## Milestone 3 — incidents & grouping 🚧 in progress
+## Milestone 3 — incidents & grouping ✅ complete
 
 ### Slice 1 — incident read path ✅ done (this slice)
 
@@ -160,11 +160,37 @@ Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 `gofmt -s`, `go test ./...` all clean.
 
-### Slice 2 — incident detail & grouping (next)
+### Slice 2 — incident detail & signals ✅ done (this slice)
 
-- Incident detail: per-occurrence history, affected refs/branches, timing.
-- Regression and flaky-test detection over the occurrence history.
-- A dashboard to browse incidents, failures and evidence.
+- `domain`: `IncidentOccurrence`, `RefSummary`, `IncidentSignals` and
+  `IncidentDetail` read models; `AnalyzeIncident` — a pure function computing a
+  per-ref breakdown and heuristic flaky/regression signals from the occurrence
+  history (no clock/I/O; fully unit-tested, table-driven).
+- `application`: `IncidentRepository` gains `GetByFingerprint` and
+  `ListOccurrences`; `IncidentService.Detail` resolves project → fingerprint →
+  occurrences and returns the assembled `IncidentDetail`. New sentinel
+  `ErrIncidentNotFound`; occurrence limit clamped (default 100, max 500).
+  Unit-tested with fakes.
+- `adapters/postgres`: `IncidentRepo.GetByFingerprint` (most-recent row per
+  fingerprint; clean not-found) and `ListOccurrences` (occurrences ⨝ jobs ⨝
+  pipelines for ref/sha/stage/GitLab ids, newest first, bounded).
+- `transport/http`: `GET /api/v1/projects/{gitlab_project_id}/incidents/{fingerprint}`
+  behind the grown `IncidentLister`; 200 detail / 400 invalid id / 404 unknown
+  project or fingerprint. Unit-tested end-to-end.
+- Live-DB integration test extended: resolve a recorded fingerprint by header,
+  list its enriched occurrence (ref/sha/job), and confirm unknown → not-found.
+
+Verified locally: `go build`, `go build -tags=integration`, `go vet`,
+`gofmt -s`, `go test ./...` all clean.
+
+## Next milestone: M4 — read API & dashboard (next)
+
+- A React + TypeScript dashboard to browse incidents, drill into an incident's
+  occurrence history and evidence, and surface the flaky/regression signals.
+- Any read-API gaps the dashboard needs (filtering, pagination cursors).
+- Later milestones: GitLab MR write-back (comments table), auth/RBAC, rate
+  limiting, observability, and richer flaky/regression detection using success
+  data and timing.
 
 ## Exact local run commands
 

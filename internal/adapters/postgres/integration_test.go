@@ -162,6 +162,30 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 		t.Errorf("incident = %+v, want fp-deadbeef/test_failure/count 1", incs[0])
 	}
 
+	// The incident detail read model should resolve the header by fingerprint
+	// and surface the enriched occurrence history (ref/sha from the pipeline).
+	header, found, err := incidentRepo.GetByFingerprint(ctx, stored.ID, "fp-deadbeef")
+	if err != nil {
+		t.Fatalf("get incident by fingerprint: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find the fp-deadbeef incident")
+	}
+	occurrences, err := incidentRepo.ListOccurrences(ctx, header.FingerprintID, 50)
+	if err != nil {
+		t.Fatalf("list occurrences: %v", err)
+	}
+	if len(occurrences) != 1 {
+		t.Fatalf("occurrences = %d, want 1", len(occurrences))
+	}
+	if occurrences[0].Ref != "main" || occurrences[0].SHA != "deadbeef" || occurrences[0].JobName != "test" {
+		t.Errorf("occurrence = %+v, want ref main / sha deadbeef / job test", occurrences[0])
+	}
+	// Unknown fingerprint must be a clean not-found, not an error.
+	if _, found, err := incidentRepo.GetByFingerprint(ctx, stored.ID, "does-not-exist"); err != nil || found {
+		t.Errorf("GetByFingerprint(unknown) = (found %v, err %v), want (false, nil)", found, err)
+	}
+
 	// Mark processed; the inbox should then be empty.
 	if err := events.MarkProcessed(ctx, claimed.ID); err != nil {
 		t.Fatalf("mark processed: %v", err)
