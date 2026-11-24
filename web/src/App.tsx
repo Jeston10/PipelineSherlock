@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { IncidentsView } from "./features/incidents/IncidentsView";
 
 type Health = {
   status: string;
@@ -55,14 +56,16 @@ export function App() {
     <main className="shell">
       <header className="masthead">
         <p className="eyebrow">PipelineSherlock</p>
-        <h1>Service status</h1>
+        <h1>CI failure intelligence</h1>
         <p className="lede">
-          Milestone 0 foundation. This panel polls the backend health and
-          readiness probes every {POLL_INTERVAL_MS / 1000}s.
+          Browse deterministic, evidence-backed failure incidents for a GitLab
+          project. Enter a registered project id to load its incidents.
         </p>
       </header>
 
-      <section className="probes" aria-label="Health probes">
+      <IncidentsView />
+
+      <section className="probes probes--compact" aria-label="Backend health">
         <ProbeCard title="Liveness" endpoint="/healthz" probe={liveness} />
         <ProbeCard title="Readiness" endpoint="/readyz" probe={readiness} />
       </section>

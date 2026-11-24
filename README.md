@@ -5,13 +5,14 @@ searchable, explainable failure incidents. The differentiator is **deterministic
 fingerprinting and evidence-backed diagnosis**, not a chat interface that guesses
 at root causes.
 
-> Status: **Milestone 0 complete; Milestone 1 (GitLab ingestion) complete;
-> Milestone 2 (failure analysis) complete; Milestone 3 (incidents & grouping)
-> complete — the read path that lists a project's incidents (slice 1) and the
-> incident detail view with occurrence history and heuristic flaky/regression
-> signals (slice 2).** This is an early-stage portfolio project, not a
-> production system. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly
-> what is built and what is next.
+> Status: **Milestones 0–3 complete; Milestone 4 (read API & dashboard) in
+> progress — a React + TypeScript dashboard that lists a project's failure
+> incidents from the read API (slice 1).** Earlier milestones: GitLab ingestion
+> (M1), the deterministic failure-analysis engine (M2), and incidents with
+> occurrence history and heuristic flaky/regression signals (M3). This is an
+> early-stage portfolio project, not a production system. See
+> [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what is built and what is
+> next.
 
 ---
 
@@ -101,12 +102,22 @@ make help         # list all targets
 
 ## Frontend
 
-A minimal Vite + React + TypeScript app lives in [`web/`](web/) and shows the
-backend health status.
+A Vite + React + TypeScript dashboard lives in [`web/`](web/). It lists a
+registered GitLab project's failure incidents from the read API (enter the
+project id and load) and shows the backend health status.
 
 ```bash
 cd web && npm install && npm run dev
 ```
+
+```bash
+npm test          # Vitest unit/component tests (also run in CI)
+npm run coverage  # tests with a coverage report
+npm run build     # type-check + production build
+```
+
+The dev server proxies `/api`, `/healthz` and `/readyz` to the Go backend on
+`localhost:8080`, so run the backend (`make dev`) alongside it.
 
 ## Repository layout
 
@@ -124,7 +135,7 @@ internal/
 migrations/            # embedded, reversible SQL migrations
 tests/fixtures/        # deterministic demo/seed data
 docs/                  # architecture.md (diagrams) + adr/
-web/                   # React + TypeScript dashboard
+web/                   # React + TypeScript dashboard (incidents list + health)
 ```
 
 ## Security & limitations (current)
@@ -171,9 +182,16 @@ web/                   # React + TypeScript dashboard
   signal logic is a pure, fully unit-tested domain function and is framed as
   *candidates for review*, not verdicts. See
   [docs/architecture.md](docs/architecture.md) §14.
-- **Not yet built:** richer flaky/regression detection using success data and
-  timing, the dashboard beyond a health view, GitLab MR write-back, auth/RBAC,
-  and any benchmark claims. No performance or scale numbers are claimed.
+- **Built (M4 slice 1):** a React + TypeScript dashboard that lists a project's
+  incidents from the read API — a typed client with boundary validation
+  (`parseIncidents`), a container with explicit loading/error/empty/data states
+  (in-flight fetches cancelled via `AbortController`), and a presentational
+  `IncidentsTable`. Vitest + Testing Library cover the client, parser and view;
+  the suite runs in CI. See [docs/architecture.md](docs/architecture.md) §15.
+- **Not yet built:** the incident detail drill-down in the dashboard (occurrence
+  history + signals), richer flaky/regression detection using success data and
+  timing, GitLab MR write-back, auth/RBAC, and any benchmark claims. No
+  performance or scale numbers are claimed.
 
 ## License
 

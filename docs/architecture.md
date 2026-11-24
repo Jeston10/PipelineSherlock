@@ -597,6 +597,52 @@ Richer detection (using success data and timing) is future work.
 
 ---
 
+## 15. Dashboard: incidents list view **[Built: M4 slice 1]**
+
+Milestone 4 puts a UI in front of the read API. Slice 1 is the incidents list:
+the operator enters a registered GitLab project id and sees that project's
+failure incidents, most recently seen first. Incident *detail* drill-down
+(occurrences + signals) is slice 2.
+
+```mermaid
+flowchart LR
+    subgraph Browser["Browser (React + TS)"]
+        FORM["IncidentsView<br/>project-id form"] --> HOOK["load effect<br/>(AbortController)"]
+        HOOK --> CLIENT["fetchIncidents()"]
+        CLIENT --> PARSE["parseIncidents()<br/>validate + map wire JSON"]
+        PARSE --> TABLE["IncidentsTable<br/>loading / error / empty / rows"]
+    end
+    CLIENT -->|"GET /api/v1/projects/{id}/incidents"| PROXY["Vite dev proxy<br/>(prod: same origin)"]
+    PROXY --> API["Go REST API"]
+    API --> DB[(PostgreSQL)]
+    API -->|JSON array| CLIENT
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class FORM,HOOK,CLIENT,PARSE,TABLE,PROXY,API,DB built;
+```
+
+**Walkthrough.** The view follows a **container / presentational** split:
+`IncidentsView` owns the selected project id and the load lifecycle, while
+`IncidentsTable` is a pure renderer of rows. The fetch runs in an effect keyed
+on the submitted id and is cancelled via `AbortController` on change or unmount,
+so a stale response can never overwrite a newer one. Every load resolves to one
+of four explicit states — **loading**, **error**, **empty**, or **rows** — each
+with its own message, rather than a blank screen or a spinner that never ends.
+
+**Boundary validation.** `parseIncidents` validates the server's JSON at the
+client boundary (never trust external data) and maps the snake_case wire format
+to camelCase domain types; a malformed field throws a typed `IncidentsError`
+rather than rendering `undefined`. The client distinguishes a 404 (project not
+registered → a friendly message) from other failures. In development the Vite
+proxy forwards `/api` to the Go backend so the SPA and API share an origin; in
+production they are served from the same origin, so no CORS handling is needed.
+
+The frontend now has its own test runner (Vitest + Testing Library + jsdom):
+the parser, the fetch client and the view are unit-tested, and the suite runs
+in CI alongside the type-check and build.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

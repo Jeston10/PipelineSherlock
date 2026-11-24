@@ -164,3 +164,195 @@ body {
 .checks .down {
   color: var(--down);
 }
+
+/* Incidents view ---------------------------------------------------------- */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.incidents-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+
+.incidents-view__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space);
+}
+
+.incidents-view__head h2 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+}
+
+.project-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.project-picker label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.project-picker input {
+  width: 8rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.project-picker input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.project-picker button,
+.linklike {
+  cursor: pointer;
+}
+
+.project-picker button {
+  padding: 0.5rem 1rem;
+  background: var(--accent);
+  color: oklch(14% 0.02 265);
+  border: none;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: filter var(--duration) var(--ease);
+}
+
+.project-picker button:hover {
+  filter: brightness(1.08);
+}
+
+.hint {
+  margin: 0;
+  padding: calc(var(--space) * 0.9);
+  background: var(--bg-elev);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+}
+
+.hint--error {
+  color: var(--down);
+  border-color: color-mix(in oklch, var(--down), transparent 55%);
+  border-style: solid;
+}
+
+.incidents {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.incidents thead th {
+  text-align: left;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.incidents td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid color-mix(in oklch, var(--border), transparent 40%);
+  font-size: 0.92rem;
+  vertical-align: top;
+}
+
+.incidents tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.incidents__row:hover {
+  background: color-mix(in oklch, var(--accent), transparent 92%);
+}
+
+.incidents .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.incidents__sig code {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--accent), transparent 40%);
+  text-underline-offset: 3px;
+}
+
+.linklike:hover {
+  text-decoration-color: var(--accent);
+}
+
+.tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.tag--infra {
+  color: var(--down);
+  border-color: color-mix(in oklch, var(--down), transparent 60%);
+}
+
+.tag--build {
+  color: oklch(80% 0.15 80);
+  border-color: color-mix(in oklch, oklch(80% 0.15 80), transparent 60%);
+}
+
+.tag--code {
+  color: var(--accent);
+  border-color: color-mix(in oklch, var(--accent), transparent 60%);
+}
+
+.tag--neutral {
+  color: var(--text-dim);
+  border-color: var(--border);
+}
+
+.probes--compact .card {
+  padding: calc(var(--space) * 0.7);
+}

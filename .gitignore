@@ -15,6 +15,7 @@
 # Node / frontend
 web/node_modules/
 web/dist/
+web/coverage/
 
 # Editor / OS
 .DS_Store

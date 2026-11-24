@@ -78,5 +78,8 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Test
+        run: npm test
+
       - name: Type-check and build
         run: npm run build

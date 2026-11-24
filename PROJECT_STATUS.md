@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-24 (M3 slice 2)
+Last updated: 2026-11-24 (M4 slice 1)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -183,14 +183,41 @@ Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 `gofmt -s`, `go test ./...` all clean.
 
-## Next milestone: M4 — read API & dashboard (next)
+## Milestone 4 — read API & dashboard 🚧 in progress
 
-- A React + TypeScript dashboard to browse incidents, drill into an incident's
-  occurrence history and evidence, and surface the flaky/regression signals.
-- Any read-API gaps the dashboard needs (filtering, pagination cursors).
-- Later milestones: GitLab MR write-back (comments table), auth/RBAC, rate
-  limiting, observability, and richer flaky/regression detection using success
-  data and timing.
+### Slice 1 — incidents list view ✅ done (this slice)
+
+- Frontend test tooling: Vitest + @testing-library/react + jsdom, with a jsdom
+  environment, global jest-dom matchers, a setup file, and v8 coverage. New
+  `test`, `test:watch` and `coverage` npm scripts.
+- `web/src/lib/incidents.ts`: typed API client. `parseIncidents` validates the
+  server JSON at the boundary and maps snake_case → camelCase; `fetchIncidents`
+  builds the request, distinguishes 404 (unregistered project) from other
+  failures via a typed `IncidentsError`. Unit-tested (parser + fetch).
+- `web/src/components/IncidentsTable.tsx`: presentational table (category tag,
+  signature, occurrences, last-seen), keyed by fingerprint.
+- `web/src/features/incidents/IncidentsView.tsx`: container owning the project-id
+  form and the load lifecycle; explicit loading/error/empty/data states; fetch
+  cancelled via `AbortController` on change/unmount. Component-tested.
+- `App.tsx`: incidents view is now the primary surface; health probes kept as a
+  compact status strip. Smoke-tested.
+- CI: the frontend job now runs `npm test` before the build.
+
+Verified locally: `npm run build` (tsc + vite) clean; `npm test` 16/16 pass;
+coverage 89% overall with every source file ≥80% statements.
+
+### Slice 2 — incident detail drill-down (next)
+
+- Click an incident to open its detail: occurrence history (ref/sha/job/stage),
+  per-ref breakdown, and the flaky/regression signals from the detail API.
+- Loading/error/empty states for the detail view; deep-linkable selection.
+
+## Later milestones
+
+- M5: GitLab MR write-back (comments table).
+- Cross-cutting: auth/RBAC, rate limiting, observability, richer flaky/
+  regression detection using success data and timing, and bumping CI off the
+  deprecated Node 20 GitHub Actions.
 
 ## Exact local run commands
 
