@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchIncidents, type Incident } from "../../lib/incidents";
 import { IncidentsTable } from "../../components/IncidentsTable";
+import { IncidentDetailView } from "./IncidentDetailView";
 
 type LoadState =
   | { status: "idle" }
@@ -15,6 +16,7 @@ export function IncidentsView() {
   const [projectInput, setProjectInput] = useState("");
   const [submittedId, setSubmittedId] = useState<number | null>(null);
   const [state, setState] = useState<LoadState>({ status: "idle" });
+  const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
     if (submittedId === null) {
@@ -23,6 +25,7 @@ export function IncidentsView() {
 
     const controller = new AbortController();
     setState({ status: "loading" });
+    setSelected(null); // a new project load closes any open detail
 
     fetchIncidents(submittedId, { signal: controller.signal })
       .then((incidents) => {
@@ -68,12 +71,26 @@ export function IncidentsView() {
         </form>
       </div>
 
-      <IncidentsResult state={state} />
+      {submittedId !== null && selected !== null ? (
+        <IncidentDetailView
+          gitlabProjectId={submittedId}
+          fingerprint={selected}
+          onBack={() => setSelected(null)}
+        />
+      ) : (
+        <IncidentsResult state={state} onSelect={setSelected} />
+      )}
     </section>
   );
 }
 
-function IncidentsResult({ state }: { state: LoadState }) {
+function IncidentsResult({
+  state,
+  onSelect,
+}: {
+  state: LoadState;
+  onSelect: (fingerprint: string) => void;
+}) {
   switch (state.status) {
     case "idle":
       return <p className="hint">Enter a registered GitLab project id to view its incidents.</p>;
@@ -93,7 +110,7 @@ function IncidentsResult({ state }: { state: LoadState }) {
       if (state.incidents.length === 0) {
         return <p className="hint">No failure incidents recorded for this project yet.</p>;
       }
-      return <IncidentsTable incidents={state.incidents} />;
+      return <IncidentsTable incidents={state.incidents} onSelect={onSelect} />;
   }
 }
 

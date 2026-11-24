@@ -7,10 +7,11 @@ at root causes.
 
 > Status: **Milestones 0–3 complete; Milestone 4 (read API & dashboard) in
 > progress — a React + TypeScript dashboard that lists a project's failure
-> incidents from the read API (slice 1).** Earlier milestones: GitLab ingestion
-> (M1), the deterministic failure-analysis engine (M2), and incidents with
-> occurrence history and heuristic flaky/regression signals (M3). This is an
-> early-stage portfolio project, not a production system. See
+> incidents (slice 1) and drills into an incident's occurrence history and
+> heuristic signals (slice 2).** Earlier milestones: GitLab ingestion (M1), the
+> deterministic failure-analysis engine (M2), and incidents with occurrence
+> history and heuristic flaky/regression signals (M3). This is an early-stage
+> portfolio project, not a production system. See
 > [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what is built and what is
 > next.
 
@@ -104,7 +105,8 @@ make help         # list all targets
 
 A Vite + React + TypeScript dashboard lives in [`web/`](web/). It lists a
 registered GitLab project's failure incidents from the read API (enter the
-project id and load) and shows the backend health status.
+project id and load), drills into an incident's occurrence history and
+heuristic signals, and shows the backend health status.
 
 ```bash
 cd web && npm install && npm run dev
@@ -135,7 +137,7 @@ internal/
 migrations/            # embedded, reversible SQL migrations
 tests/fixtures/        # deterministic demo/seed data
 docs/                  # architecture.md (diagrams) + adr/
-web/                   # React + TypeScript dashboard (incidents list + health)
+web/                   # React + TypeScript dashboard (incidents list + detail + health)
 ```
 
 ## Security & limitations (current)
@@ -188,10 +190,16 @@ web/                   # React + TypeScript dashboard (incidents list + health)
   (in-flight fetches cancelled via `AbortController`), and a presentational
   `IncidentsTable`. Vitest + Testing Library cover the client, parser and view;
   the suite runs in CI. See [docs/architecture.md](docs/architecture.md) §15.
-- **Not yet built:** the incident detail drill-down in the dashboard (occurrence
-  history + signals), richer flaky/regression detection using success data and
-  timing, GitLab MR write-back, auth/RBAC, and any benchmark claims. No
-  performance or scale numbers are claimed.
+- **Built (M4 slice 2):** the incident detail drill-down — clicking a row loads
+  `GET /…/incidents/{fingerprint}` and shows the occurrence history (ref, sha,
+  job, stage, pipeline), a per-ref breakdown, and the flaky/regression signals
+  (framed as candidates for review). A second container owns the detail load;
+  back returns to the list without refetching. See
+  [docs/architecture.md](docs/architecture.md) §16.
+- **Not yet built:** deep-linkable incident selection (URL state), richer
+  flaky/regression detection using success data and timing, GitLab MR
+  write-back, auth/RBAC, and any benchmark claims. No performance or scale
+  numbers are claimed.
 
 ## License
 

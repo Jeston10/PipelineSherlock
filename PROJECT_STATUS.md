@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-24 (M4 slice 1)
+Last updated: 2026-11-25 (M4 slice 2)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -183,7 +183,7 @@ Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 `gofmt -s`, `go test ./...` all clean.
 
-## Milestone 4 — read API & dashboard 🚧 in progress
+## Milestone 4 — read API & dashboard ✅ complete
 
 ### Slice 1 — incidents list view ✅ done (this slice)
 
@@ -206,11 +206,31 @@ Verified locally: `go build`, `go build -tags=integration`, `go vet`,
 Verified locally: `npm run build` (tsc + vite) clean; `npm test` 16/16 pass;
 coverage 89% overall with every source file ≥80% statements.
 
-### Slice 2 — incident detail drill-down (next)
+### Slice 2 — incident detail drill-down ✅ done (this slice)
 
-- Click an incident to open its detail: occurrence history (ref/sha/job/stage),
-  per-ref breakdown, and the flaky/regression signals from the detail API.
-- Loading/error/empty states for the detail view; deep-linkable selection.
+- `web/src/lib/incidents.ts`: extended with detail types (`IncidentOccurrence`,
+  `RefSummary`, `IncidentSignals`, `IncidentDetail`), `parseIncidentDetail`
+  (validates the nested shape, incl. the six signal booleans) and
+  `fetchIncidentDetail` (url-encodes the fingerprint; reads the server's 404
+  error text to distinguish unknown project vs unknown incident). Unit-tested.
+- `web/src/components/IncidentDetail.tsx`: presentational card — header, signal
+  badges (flaky/regression as candidates + raw ref/commit counts), per-ref
+  breakdown, and the occurrence-history table. Unit-tested.
+- `web/src/features/incidents/IncidentDetailView.tsx`: container owning the
+  detail load lifecycle (keyed on project+fingerprint, `AbortController`
+  cancel), with a back control and loading/error states. Component-tested.
+- `IncidentsView`: a row's signature is now a button that selects the
+  fingerprint and swaps the list for the detail; back restores the list with no
+  refetch; a new project load clears the selection. Test updated.
+- Styles for the detail view (signals, refs, occurrence table).
+
+Verified locally: `npm run build` clean; `npm test` 30/30 pass; coverage 92.7%
+overall with every source file ≥80% statements.
+
+## Next: polish & cross-cutting
+
+- Deep-linkable incident selection (URL state) so a detail view is shareable.
+- Richer flaky/regression detection using success data and timing.
 
 ## Later milestones
 

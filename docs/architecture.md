@@ -643,6 +643,46 @@ in CI alongside the type-check and build.
 
 ---
 
+## 16. Dashboard: incident detail drill-down **[Built: M4 slice 2]**
+
+Slice 2 makes each incident row open its detail: the occurrence history, a
+per-ref breakdown, and the heuristic signals from the M3 detail API — the full
+evidence behind "this failure happened N times".
+
+```mermaid
+flowchart TD
+    LIST["IncidentsTable row<br/>(signature button)"] -->|onSelect fingerprint| SEL["IncidentsView<br/>selected = fingerprint"]
+    SEL --> DV["IncidentDetailView<br/>load effect (AbortController)"]
+    DV --> FETCH["fetchIncidentDetail()"]
+    FETCH -->|"GET /incidents/{fingerprint}"| API["Go detail API"]
+    API -->|JSON| PARSE["parseIncidentDetail()<br/>validate header + occurrences +<br/>affected_refs + signals"]
+    PARSE --> CARD["IncidentDetail card<br/>signals · refs · occurrence history"]
+    DV -->|onBack| SEL2["selected = null → back to list"]
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class LIST,SEL,DV,FETCH,API,PARSE,CARD,SEL2 built;
+```
+
+**Walkthrough.** Selection is state in `IncidentsView`: a row's signature is a
+button that sets the selected fingerprint; the view then swaps the list for
+`IncidentDetailView`, a second container that owns the detail load (keyed on
+project + fingerprint, cancelled on change/unmount like the list). The list's
+own loaded state is preserved, so **Back** is instant with no refetch. Starting
+a new project load clears the selection.
+
+`parseIncidentDetail` extends the boundary validation to the nested shape —
+occurrences, the per-ref breakdown and the six signal booleans — so a malformed
+field throws rather than rendering `undefined`. The detail fetch reads the
+server's 404 error text to distinguish an unregistered project from an unknown
+fingerprint. The card presents the two signals as **candidates for review**
+(matching §14's honest framing) and shows the raw `distinct_refs` /
+`distinct_shas` counts beside them.
+
+Selection is in-memory for now; making it deep-linkable via the URL is a noted
+follow-up.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

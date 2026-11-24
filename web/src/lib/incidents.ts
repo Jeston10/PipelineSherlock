@@ -104,3 +104,146 @@ export async function fetchIncidents(
   const body: unknown = await res.json();
   return parseIncidents(body);
 }
+
+// --- Incident detail -------------------------------------------------------
+
+export interface IncidentOccurrence {
+  observedAt: string;
+  ref: string;
+  sha: string;
+  jobName: string;
+  stage: string;
+  gitlabJobId: number;
+  gitlabPipelineId: number;
+  evidenceExcerpt: string;
+}
+
+export interface RefSummary {
+  ref: string;
+  occurrenceCount: number;
+  distinctShas: number;
+}
+
+export interface IncidentSignals {
+  distinctRefs: number;
+  distinctShas: number;
+  repeatedOnSameCommit: boolean;
+  spansMultipleCommits: boolean;
+  flakySuspected: boolean;
+  regressionSuspected: boolean;
+}
+
+export interface IncidentDetail extends Incident {
+  occurrences: IncidentOccurrence[];
+  affectedRefs: RefSummary[];
+  signals: IncidentSignals;
+}
+
+function readBoolean(obj: Record<string, unknown>, key: string): boolean {
+  const v = obj[key];
+  if (typeof v !== "boolean") {
+    throw new IncidentsError(`malformed incident: ${key} must be a boolean`, 0);
+  }
+  return v;
+}
+
+function parseOccurrence(value: unknown): IncidentOccurrence {
+  const obj = asRecord(value, "occurrence");
+  return {
+    observedAt: readString(obj, "observed_at"),
+    ref: readString(obj, "ref"),
+    sha: readString(obj, "sha"),
+    jobName: readString(obj, "job_name"),
+    stage: readString(obj, "stage"),
+    gitlabJobId: readNumber(obj, "gitlab_job_id"),
+    gitlabPipelineId: readNumber(obj, "gitlab_pipeline_id"),
+    evidenceExcerpt: readString(obj, "evidence_excerpt"),
+  };
+}
+
+function parseRefSummary(value: unknown): RefSummary {
+  const obj = asRecord(value, "ref summary");
+  return {
+    ref: readString(obj, "ref"),
+    occurrenceCount: readNumber(obj, "occurrence_count"),
+    distinctShas: readNumber(obj, "distinct_shas"),
+  };
+}
+
+function parseSignals(value: unknown): IncidentSignals {
+  const obj = asRecord(value, "signals");
+  return {
+    distinctRefs: readNumber(obj, "distinct_refs"),
+    distinctShas: readNumber(obj, "distinct_shas"),
+    repeatedOnSameCommit: readBoolean(obj, "repeated_on_same_commit"),
+    spansMultipleCommits: readBoolean(obj, "spans_multiple_commits"),
+    flakySuspected: readBoolean(obj, "flaky_suspected"),
+    regressionSuspected: readBoolean(obj, "regression_suspected"),
+  };
+}
+
+function readArray(obj: Record<string, unknown>, key: string): unknown[] {
+  const v = obj[key];
+  if (!Array.isArray(v)) {
+    throw new IncidentsError(`malformed incident: ${key} must be an array`, 0);
+  }
+  return v;
+}
+
+// parseIncidentDetail validates and maps the single-incident response: the
+// header fields plus the occurrence history, per-ref breakdown and signals.
+export function parseIncidentDetail(data: unknown): IncidentDetail {
+  const header = parseIncident(data);
+  const obj = asRecord(data, "incident detail");
+  return {
+    ...header,
+    occurrences: readArray(obj, "occurrences").map(parseOccurrence),
+    affectedRefs: readArray(obj, "affected_refs").map(parseRefSummary),
+    signals: parseSignals(obj["signals"]),
+  };
+}
+
+// fetchIncidentDetail loads one incident by fingerprint. On a 404 it tries to
+// read the server's error text to give a precise message (unknown project vs
+// unknown incident), falling back to a generic one.
+export async function fetchIncidentDetail(
+  gitlabProjectId: number,
+  fingerprint: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<IncidentDetail> {
+  const url = `/api/v1/projects/${gitlabProjectId}/incidents/${encodeURIComponent(fingerprint)}`;
+
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: options.signal,
+  });
+
+  if (!res.ok) {
+    let message = `Request failed with status ${res.status}.`;
+    if (res.status === 404) {
+      message = (await readErrorText(res)) ?? "Incident not found.";
+    }
+    throw new IncidentsError(message, res.status);
+  }
+
+  const body: unknown = await res.json();
+  return parseIncidentDetail(body);
+}
+
+// readErrorText best-effort reads a `{ "error": "..." }` body and returns it as
+// a sentence. Returns undefined if the body is missing or not shaped that way.
+async function readErrorText(res: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await res.json();
+    if (typeof body === "object" && body !== null && "error" in body) {
+      const err = (body as Record<string, unknown>)["error"];
+      if (typeof err === "string" && err.length > 0) {
+        const trimmed = err.trim();
+        return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}.`;
+      }
+    }
+  } catch {
+    // Non-JSON or empty body — fall back to the generic message.
+  }
+  return undefined;
+}

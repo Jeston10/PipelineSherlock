@@ -77,4 +77,43 @@ describe("IncidentsView", () => {
     );
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it("opens the incident detail when a row is selected, and returns on back", async () => {
+    const detailBody = {
+      ...wireIncident,
+      occurrences: [],
+      affected_refs: [],
+      signals: {
+        distinct_refs: 1,
+        distinct_shas: 1,
+        repeated_on_same_commit: false,
+        spans_multiple_commits: false,
+        flaky_suspected: false,
+        regression_suspected: false,
+      },
+    };
+    stubFetch((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.endsWith("/incidents") ? [wireIncident] : detailBody;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch);
+
+    render(<IncidentsView />);
+    await userEvent.type(screen.getByLabelText(/gitlab project id/i), "1001");
+    await userEvent.click(screen.getByRole("button", { name: /load/i }));
+
+    // Row signature renders as a button when selectable.
+    const row = await screen.findByRole("button", { name: /--- FAIL: TestLogin/ });
+    await userEvent.click(row);
+
+    // Detail view shows the back control and the signals section.
+    const back = await screen.findByRole("button", { name: /back to incidents/i });
+    expect(screen.getByText("No signals")).toBeInTheDocument();
+
+    await userEvent.click(back);
+
+    // Back returns to the list (signature button present again, no back control).
+    expect(await screen.findByRole("button", { name: /--- FAIL: TestLogin/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /back to incidents/i })).not.toBeInTheDocument();
+  });
 });

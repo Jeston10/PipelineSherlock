@@ -356,3 +356,201 @@ body {
 .probes--compact .card {
   padding: calc(var(--space) * 0.7);
 }
+
+/* Incident detail --------------------------------------------------------- */
+
+.detail-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+
+.back {
+  align-self: flex-start;
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  padding: 0.35rem 0.85rem;
+  font-size: 0.85rem;
+  transition:
+    color var(--duration) var(--ease),
+    border-color var(--duration) var(--ease);
+}
+
+.back:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 0.9);
+}
+
+.detail__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.detail__sig {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.detail__sig code {
+  font-family: var(--font-mono);
+  color: var(--text);
+  word-break: break-word;
+}
+
+.detail__meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.detail__meta-item dt {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.detail__meta-item dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.92rem;
+}
+
+.detail__meta-item dd.mono {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.signal-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.signal {
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.signal--flaky {
+  color: oklch(82% 0.15 80);
+  border-color: color-mix(in oklch, oklch(82% 0.15 80), transparent 55%);
+  background: color-mix(in oklch, oklch(82% 0.15 80), transparent 88%);
+}
+
+.signal--regression {
+  color: var(--down);
+  border-color: color-mix(in oklch, var(--down), transparent 55%);
+  background: color-mix(in oklch, var(--down), transparent 88%);
+}
+
+.signal--none {
+  color: var(--ok);
+  border-color: color-mix(in oklch, var(--ok), transparent 60%);
+}
+
+.signal--count {
+  color: var(--text-dim);
+  border-color: var(--border);
+}
+
+.detail__note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.detail__refs h4,
+.detail__history h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
+}
+
+.refs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.refs__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.refs__item code {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+.refs__counts {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.occurrences {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.occurrences th {
+  text-align: left;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.occurrences td {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid color-mix(in oklch, var(--border), transparent 50%);
+  vertical-align: top;
+}
+
+.occurrences tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.occurrences code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.occurrences__stage {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.occurrences .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
