@@ -5,13 +5,14 @@ searchable, explainable failure incidents. The differentiator is **deterministic
 fingerprinting and evidence-backed diagnosis**, not a chat interface that guesses
 at root causes.
 
-> Status: **Milestones 0–3 complete; Milestone 4 (read API & dashboard) in
-> progress — a React + TypeScript dashboard that lists a project's failure
-> incidents (slice 1) and drills into an incident's occurrence history and
-> heuristic signals (slice 2).** Earlier milestones: GitLab ingestion (M1), the
-> deterministic failure-analysis engine (M2), and incidents with occurrence
-> history and heuristic flaky/regression signals (M3). This is an early-stage
-> portfolio project, not a production system. See
+> Status: **Milestones 0–4 complete; Milestone 5 (GitLab MR write-back) in
+> progress — slice 1 builds the write-back engine (idempotent `comments` store,
+> GitLab note POST, and the `WriteBackService` use case), fully unit-tested and
+> not yet wired into the worker.** Earlier milestones: GitLab ingestion (M1),
+> the deterministic failure-analysis engine (M2), incidents with occurrence
+> history and heuristic flaky/regression signals (M3), and a React + TypeScript
+> dashboard that lists incidents and drills into an incident's detail (M4). This
+> is an early-stage portfolio project, not a production system. See
 > [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what is built and what is
 > next.
 
@@ -196,10 +197,19 @@ web/                   # React + TypeScript dashboard (incidents list + detail +
   (framed as candidates for review). A second container owns the detail load;
   back returns to the list without refetching. See
   [docs/architecture.md](docs/architecture.md) §16.
-- **Not yet built:** deep-linkable incident selection (URL state), richer
-  flaky/regression detection using success data and timing, GitLab MR
-  write-back, auth/RBAC, and any benchmark claims. No performance or scale
-  numbers are claimed.
+- **Built (M5 slice 1):** the GitLab merge-request write-back engine — a
+  `Comment` domain entity, an idempotent `comments` store (unique on
+  `(fingerprint_id, merge_request_iid)`, migration 0005), a GitLab
+  `PostMergeRequestNote` client method, and a `WriteBackService` use case that
+  enqueues → posts → marks posted/failed exactly once per incident+MR. The
+  comment body is a pure, deterministic Markdown function. Fully unit-tested;
+  not yet wired into the worker. See [docs/architecture.md](docs/architecture.md)
+  §17.
+- **Not yet built:** wiring write-back into the worker (detecting the MR from a
+  pipeline, config toggle — M5 slice 2), deep-linkable incident selection (URL
+  state), richer flaky/regression detection using success data and timing,
+  auth/RBAC, and any benchmark claims. No performance or scale numbers are
+  claimed.
 
 ## License
 

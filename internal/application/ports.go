@@ -108,6 +108,24 @@ type IncidentRepository interface {
 	ListOccurrences(ctx context.Context, fingerprintID string, limit int) ([]domain.IncidentOccurrence, error)
 }
 
+// CommentRepository persists merge-request write-back comments, keyed by
+// (fingerprint, merge request) so one incident yields at most one comment per
+// MR.
+type CommentRepository interface {
+	// Enqueue records a pending comment intent. It is idempotent on
+	// (FingerprintID, MergeRequestIID): created is false when a comment for that
+	// pair already exists, in which case nothing new is written. In both cases id
+	// is the persisted row id, so the caller can update its status.
+	Enqueue(ctx context.Context, c domain.Comment) (id string, created bool, err error)
+
+	// MarkPosted records that the comment was posted, storing the GitLab note id
+	// and stamping the posted time.
+	MarkPosted(ctx context.Context, id string, gitlabNoteID int64) error
+
+	// MarkFailed records that the comment's post attempt failed.
+	MarkFailed(ctx context.Context, id string) error
+}
+
 // GitLabPipeline is the subset of a GitLab pipeline the worker reconciles.
 type GitLabPipeline struct {
 	ID         int64

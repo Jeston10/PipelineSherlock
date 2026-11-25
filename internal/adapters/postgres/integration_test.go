@@ -186,6 +186,51 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 		t.Errorf("GetByFingerprint(unknown) = (found %v, err %v), want (false, nil)", found, err)
 	}
 
+	// Merge-request write-back: enqueue a comment for this incident, posting it
+	// at most once per (fingerprint, MR) even when enqueued twice.
+	comments := NewCommentRepo(db.Pool)
+	comment, err := domain.NewComment(header.FingerprintID, 42)
+	if err != nil {
+		t.Fatalf("new comment: %v", err)
+	}
+	commentID, created, err := comments.Enqueue(ctx, comment)
+	if err != nil {
+		t.Fatalf("enqueue comment: %v", err)
+	}
+	if !created || commentID == "" {
+		t.Fatalf("first enqueue = (created %v, id %q), want (true, non-empty)", created, commentID)
+	}
+	againID, created, err := comments.Enqueue(ctx, comment)
+	if err != nil {
+		t.Fatalf("re-enqueue comment: %v", err)
+	}
+	if created || againID != commentID {
+		t.Errorf("re-enqueue = (created %v, id %q), want (false, %q) — must be idempotent", created, againID, commentID)
+	}
+	var commentCount int
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM comments").Scan(&commentCount); err != nil {
+		t.Fatalf("count comments: %v", err)
+	}
+	if commentCount != 1 {
+		t.Errorf("comments = %d, want 1 after idempotent enqueue", commentCount)
+	}
+
+	// Mark it posted and verify the persisted status, note id and timestamp.
+	if err := comments.MarkPosted(ctx, commentID, 777); err != nil {
+		t.Fatalf("mark posted: %v", err)
+	}
+	var status string
+	var noteID int64
+	var postedAt *time.Time
+	if err := db.Pool.QueryRow(ctx,
+		"SELECT status, gitlab_note_id, posted_at FROM comments WHERE id = $1", commentID,
+	).Scan(&status, &noteID, &postedAt); err != nil {
+		t.Fatalf("read comment: %v", err)
+	}
+	if status != "posted" || noteID != 777 || postedAt == nil {
+		t.Errorf("comment = (status %q, note %d, postedAt %v), want posted/777/non-nil", status, noteID, postedAt)
+	}
+
 	// Mark processed; the inbox should then be empty.
 	if err := events.MarkProcessed(ctx, claimed.ID); err != nil {
 		t.Fatalf("mark processed: %v", err)

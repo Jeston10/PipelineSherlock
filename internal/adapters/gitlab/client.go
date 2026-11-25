@@ -4,6 +4,7 @@
 package gitlab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -69,7 +70,10 @@ func New(baseURL, token string, opts ...Option) *Client {
 	return c
 }
 
-var _ application.GitLabClient = (*Client)(nil)
+var (
+	_ application.GitLabClient          = (*Client)(nil)
+	_ application.MergeRequestCommenter = (*Client)(nil)
+)
 
 // apiPipeline mirrors the GitLab pipeline JSON we consume.
 type apiPipeline struct {
@@ -212,6 +216,81 @@ func (c *Client) doGet(ctx context.Context, path string, query url.Values, accep
 		return nil, nil, fmt.Errorf("gitlab status %d for %s", status, path)
 	}
 	return nil, nil, fmt.Errorf("gitlab request failed after %d attempts: %w", c.maxRetries+1, lastErr)
+}
+
+// noteResponse mirrors the created-note JSON we consume.
+type noteResponse struct {
+	ID int64 `json:"id"`
+}
+
+// PostMergeRequestNote posts body as a note on a merge request and returns the
+// created note's id. It satisfies application.MergeRequestCommenter.
+func (c *Client) PostMergeRequestNote(ctx context.Context, gitlabProjectID, mergeRequestIID int64, body string) (int64, error) {
+	path := fmt.Sprintf("/api/v4/projects/%d/merge_requests/%d/notes", gitlabProjectID, mergeRequestIID)
+	reqBody, err := json.Marshal(map[string]string{"body": body})
+	if err != nil {
+		return 0, fmt.Errorf("encode note: %w", err)
+	}
+	respBody, err := c.doPost(ctx, path, reqBody)
+	if err != nil {
+		return 0, err
+	}
+	var note noteResponse
+	if err := json.Unmarshal(respBody, &note); err != nil {
+		return 0, fmt.Errorf("decode gitlab note response: %w", err)
+	}
+	return note.ID, nil
+}
+
+// doPost performs a POST with the shared retry/backoff policy and returns the
+// raw 2xx body. reqBody is sent as application/json and re-sent on each retry.
+//
+// Retries here match doGet (transport errors and 5xx/429). Note creation is not
+// itself idempotent on GitLab's side, but the write-back use case only posts
+// when its own (fingerprint, MR) record was newly created, so a lost-response
+// retry is the only window for a duplicate — an acceptable trade for resilience.
+func (c *Client) doPost(ctx context.Context, path string, reqBody []byte) ([]byte, error) {
+	full := c.baseURL + path
+
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if attempt > 0 {
+			if err := sleepCtx(ctx, c.backoff(attempt)); err != nil {
+				return nil, err
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, full, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set(tokenHeader, c.token)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("gitlab request: %w", err)
+			continue // transient transport error → retry
+		}
+
+		body, _, status, readErr := drain(resp)
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+
+		if status >= 200 && status < 300 {
+			return body, nil
+		}
+		if retryableStatus(status) {
+			lastErr = fmt.Errorf("gitlab status %d", status)
+			continue
+		}
+		// Non-retryable (e.g. 400, 401, 403, 404).
+		return nil, fmt.Errorf("gitlab status %d for %s", status, path)
+	}
+	return nil, fmt.Errorf("gitlab request failed after %d attempts: %w", c.maxRetries+1, lastErr)
 }
 
 // GetJobTrace fetches the raw log (trace) for a job. GitLab returns plain text,

@@ -683,6 +683,61 @@ follow-up.
 
 ---
 
+## 17. GitLab merge-request write-back engine **[Built: M5 slice 1]**
+
+Milestone 5 closes the loop: when a known failure fingerprint shows up in a
+merge request's pipeline, PipelineSherlock posts the evidence back as an MR
+comment. Slice 1 builds the write-back **engine** — the domain entity, the
+idempotent persistence, the GitLab POST and the use case that ties them
+together — fully unit-tested. Detecting the MR from a pipeline and calling this
+engine from the background worker is slice 2, so no node below is wired into the
+worker yet.
+
+```mermaid
+flowchart TD
+    TRIG["Worker trigger<br/>(fingerprint + MR iid)"]:::planned -->|WriteBackInput| SVC["WriteBackService.PostDiagnosis"]
+    SVC --> NEW["domain.NewComment<br/>(validate fingerprint + MR iid)"]
+    NEW --> ENQ["CommentRepository.Enqueue<br/>INSERT ... ON CONFLICT DO NOTHING"]
+    ENQ -->|"created = false"| SKIP["idempotent skip<br/>(comment already recorded)"]
+    ENQ -->|"created = true"| RENDER["RenderIncidentComment<br/>(pure Markdown body)"]
+    RENDER --> POST["gitlab.PostMergeRequestNote<br/>POST /projects/:id/merge_requests/:iid/notes"]
+    POST -->|"ok (note id)"| MP["CommentRepository.MarkPosted<br/>status=posted, note id, posted_at"]
+    POST -->|"error"| MF["CommentRepository.MarkFailed<br/>status=failed"]
+    ENQ --> PG[("comments<br/>UNIQUE (fingerprint_id, merge_request_iid)")]
+    MP --> PG
+    MF --> PG
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    classDef planned fill:#8b949e22,stroke:#8b949e,stroke-width:1px,stroke-dasharray:4 3;
+    class SVC,NEW,ENQ,SKIP,RENDER,POST,MP,MF,PG built;
+```
+
+**Walkthrough.** `PostDiagnosis` first builds a `domain.Comment`, which enforces
+a non-empty fingerprint and a positive merge-request iid. It then calls
+`CommentRepository.Enqueue`, whose `INSERT ... ON CONFLICT DO NOTHING` on the new
+`comments_fingerprint_mr_unique` constraint (migration 0005) is the idempotency
+pivot: the first call for a (fingerprint, MR) pair returns `created = true` with
+the new row id, and any later call returns `created = false` with the *same* id.
+On `created = false` the use case stops — no second note is ever posted for the
+same incident on the same MR.
+
+On a new comment it renders the body with `RenderIncidentComment`, a pure
+function (no clock, IO or randomness — the same incident always produces the same
+Markdown), and posts it through `gitlab.PostMergeRequestNote`. That method reuses
+the client's retry/backoff policy via a new `doPost` path; it is defined against a
+small consumer-side `MergeRequestCommenter` interface so the write-back use case
+never depends on the wider `GitLabClient` surface. A successful post records the
+GitLab note id and timestamp (`MarkPosted`); a failure marks the row `failed` and
+returns the error so the caller can decide whether to retry.
+
+Write-back is opt-in by design (it needs a configured GitLab token), and the
+comment is framed as a deterministic fingerprint match, not a verdict —
+consistent with the signal framing in §14. Slice 2 will detect the MR iid from
+the pipeline/webhook, wire `WriteBackService` into the worker, and gate it behind
+a write-back toggle in `cmd/server`.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

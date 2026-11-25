@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-25 (M4 slice 2)
+Last updated: 2026-11-25 (M5 slice 1)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -227,6 +227,36 @@ coverage 89% overall with every source file ≥80% statements.
 Verified locally: `npm run build` clean; `npm test` 30/30 pass; coverage 92.7%
 overall with every source file ≥80% statements.
 
+## Milestone 5 — GitLab MR write-back 🚧 in progress
+
+### Slice 1 — write-back engine ✅ done (this slice)
+
+- `migrations/0005_comments_idempotency.{up,down}.sql`: a unique constraint on
+  `comments (fingerprint_id, merge_request_iid)` so write-back is idempotent —
+  at most one comment per incident per merge request.
+- `domain.Comment` (+ `CommentStatus` pending/posted/failed): immutable entity
+  with `NewComment` validation and `WithPosted`/`WithFailed` copies.
+  Table-driven unit tests.
+- `application.CommentRepository` port (`Enqueue` idempotent, `MarkPosted`,
+  `MarkFailed`) and a `MergeRequestCommenter` consumer-side interface next to
+  the use case (keeps write-back off the wider `GitLabClient` surface).
+- `application.WriteBackService.PostDiagnosis`: enqueue → (skip if already
+  recorded) → render body → post → mark posted/failed. `RenderIncidentComment`
+  is a pure, deterministic Markdown function. Unit-tested with stubs
+  (post/idempotent-skip/mark-failed/invalid-input).
+- `adapters/gitlab`: `PostMergeRequestNote` (POST
+  `/projects/:id/merge_requests/:iid/notes`) over a new `doPost` path reusing
+  the retry/backoff policy. `httptest`-driven unit tests (happy path, 5xx
+  retry, non-retryable 404).
+- `adapters/postgres.CommentRepo`: implements the port; integration test
+  extended to cover idempotent `Enqueue` + `MarkPosted` against the live
+  `comments` table and the 0005 constraint.
+- Not yet wired into the worker (slice 2). See
+  [docs/architecture.md](docs/architecture.md) §17.
+
+Verified locally: `gofmt` clean, `go vet ./...` and `go build ./...` pass,
+`go test ./...` green, and the `-tags=integration` tests compile.
+
 ## Next: polish & cross-cutting
 
 - Deep-linkable incident selection (URL state) so a detail view is shareable.
@@ -234,7 +264,9 @@ overall with every source file ≥80% statements.
 
 ## Later milestones
 
-- M5: GitLab MR write-back (comments table).
+- M5 slice 2: detect the MR iid from the pipeline/webhook, wire
+  `WriteBackService` into the worker, and gate it behind a write-back toggle in
+  `cmd/server`.
 - Cross-cutting: auth/RBAC, rate limiting, observability, richer flaky/
   regression detection using success data and timing, and bumping CI off the
   deprecated Node 20 GitHub Actions.
