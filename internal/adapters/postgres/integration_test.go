@@ -130,7 +130,7 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 		EvidenceHash:        "evhash",
 	}
 	for i := 0; i < 2; i++ {
-		if err := fingerprints.RecordOccurrence(ctx, occ); err != nil {
+		if _, err := fingerprints.RecordOccurrence(ctx, occ); err != nil {
 			t.Fatalf("record occurrence #%d: %v", i+1, err)
 		}
 	}

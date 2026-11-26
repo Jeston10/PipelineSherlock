@@ -35,6 +35,10 @@ type Config struct {
 	// GitLabToken is an optional personal/project access token. When empty the
 	// worker is disabled and the service only ingests webhooks.
 	GitLabToken string
+	// WriteBackEnabled opts in to posting incident diagnoses back to the merge
+	// request a failing pipeline belongs to. It takes effect only alongside a
+	// configured GitLab token (see WriteBackActive).
+	WriteBackEnabled bool
 }
 
 // Default values applied when an optional variable is unset.
@@ -60,15 +64,16 @@ func Load(getenv Getenv) (Config, error) {
 	}
 
 	cfg := Config{
-		Env:             firstNonEmpty(getenv("APP_ENV"), "development"),
-		HTTPAddr:        firstNonEmpty(getenv("HTTP_ADDR"), defaultHTTPAddr),
-		DatabaseURL:     strings.TrimSpace(getenv("DATABASE_URL")),
-		RedisURL:        strings.TrimSpace(getenv("REDIS_URL")),
-		ShutdownTimeout: defaultShutdownTimeout,
-		ReadTimeout:     defaultReadTimeout,
-		WriteTimeout:    defaultWriteTimeout,
-		GitLabBaseURL:   firstNonEmpty(getenv("GITLAB_BASE_URL"), defaultGitLabBaseURL),
-		GitLabToken:     strings.TrimSpace(getenv("GITLAB_TOKEN")),
+		Env:              firstNonEmpty(getenv("APP_ENV"), "development"),
+		HTTPAddr:         firstNonEmpty(getenv("HTTP_ADDR"), defaultHTTPAddr),
+		DatabaseURL:      strings.TrimSpace(getenv("DATABASE_URL")),
+		RedisURL:         strings.TrimSpace(getenv("REDIS_URL")),
+		ShutdownTimeout:  defaultShutdownTimeout,
+		ReadTimeout:      defaultReadTimeout,
+		WriteTimeout:     defaultWriteTimeout,
+		GitLabBaseURL:    firstNonEmpty(getenv("GITLAB_BASE_URL"), defaultGitLabBaseURL),
+		GitLabToken:      strings.TrimSpace(getenv("GITLAB_TOKEN")),
+		WriteBackEnabled: boolEnv(getenv, "GITLAB_WRITEBACK_ENABLED"),
 	}
 
 	if d, err := durationEnv(getenv, "SHUTDOWN_TIMEOUT"); err != nil {
@@ -121,9 +126,9 @@ func (c Config) validate() error {
 // credentials. It is intended for startup logging.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"env=%s http_addr=%s database=%s redis=%s gitlab=%s gitlab_token=%s shutdown_timeout=%s",
+		"env=%s http_addr=%s database=%s redis=%s gitlab=%s gitlab_token=%s writeback=%t shutdown_timeout=%s",
 		c.Env, c.HTTPAddr, redactURL(c.DatabaseURL), redactURL(c.RedisURL),
-		c.GitLabBaseURL, redactSecret(c.GitLabToken), c.ShutdownTimeout,
+		c.GitLabBaseURL, redactSecret(c.GitLabToken), c.WriteBackActive(), c.ShutdownTimeout,
 	)
 }
 
@@ -133,6 +138,24 @@ func (c Config) RedisEnabled() bool { return c.RedisURL != "" }
 // GitLabConfigured reports whether a GitLab token is present, which enables the
 // background reconciliation worker.
 func (c Config) GitLabConfigured() bool { return c.GitLabToken != "" }
+
+// WriteBackActive reports whether merge-request write-back should run: it needs
+// both the opt-in flag and a configured GitLab token (posting requires the API).
+func (c Config) WriteBackActive() bool { return c.WriteBackEnabled && c.GitLabConfigured() }
+
+// boolEnv reads a boolean environment variable. An unset or unparseable value is
+// false, so an opt-in flag stays off unless explicitly enabled.
+func boolEnv(getenv Getenv, key string) bool {
+	raw := strings.TrimSpace(getenv(key))
+	if raw == "" {
+		return false
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false
+	}
+	return v
+}
 
 func durationEnv(getenv Getenv, key string) (time.Duration, error) {
 	raw := strings.TrimSpace(getenv(key))

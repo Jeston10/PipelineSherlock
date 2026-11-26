@@ -25,19 +25,30 @@ type ProcessEventsService struct {
 	events       WebhookEventRepository
 	pipelines    PipelineRepository
 	fingerprints FingerprintRepository
-	gitlab       GitLabClient // nil when no GitLab token is configured
+	gitlab       GitLabClient      // nil when no GitLab token is configured
+	writeBack    *WriteBackService // nil when MR write-back is disabled
 	logger       *slog.Logger
 	maxAttempts  int
 }
 
+// ProcessOption configures optional processor behaviour.
+type ProcessOption func(*ProcessEventsService)
+
+// WithWriteBack enables posting an incident diagnosis back to the merge request
+// a failing pipeline belongs to. When unset, write-back is skipped entirely.
+func WithWriteBack(wb *WriteBackService) ProcessOption {
+	return func(s *ProcessEventsService) { s.writeBack = wb }
+}
+
 // NewProcessEventsService wires the processor. gitlab may be nil, in which case
 // reconciliation falls back to the webhook payload and failed jobs are not
-// fingerprinted (traces are only available through the GitLab API).
-func NewProcessEventsService(events WebhookEventRepository, pipelines PipelineRepository, fingerprints FingerprintRepository, gitlab GitLabClient, logger *slog.Logger) *ProcessEventsService {
+// fingerprinted (traces are only available through the GitLab API). Optional
+// behaviour such as merge-request write-back is supplied via options.
+func NewProcessEventsService(events WebhookEventRepository, pipelines PipelineRepository, fingerprints FingerprintRepository, gitlab GitLabClient, logger *slog.Logger, opts ...ProcessOption) *ProcessEventsService {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &ProcessEventsService{
+	s := &ProcessEventsService{
 		events:       events,
 		pipelines:    pipelines,
 		fingerprints: fingerprints,
@@ -45,6 +56,10 @@ func NewProcessEventsService(events WebhookEventRepository, pipelines PipelineRe
 		logger:       logger,
 		maxAttempts:  defaultMaxAttempts,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // ProcessNext claims and processes at most one event. progressed is true when
@@ -73,7 +88,7 @@ func (s *ProcessEventsService) ProcessNext(ctx context.Context) (progressed bool
 
 // reconcile turns one inbox event into persisted pipeline/job rows.
 func (s *ProcessEventsService) reconcile(ctx context.Context, ev domain.WebhookEvent) error {
-	isPipeline, gitlabProjectID, glp, gljobs, err := parsePipelinePayload(ev.Payload)
+	isPipeline, gitlabProjectID, mergeRequestIID, glp, gljobs, err := parsePipelinePayload(ev.Payload)
 	if err != nil {
 		return fmt.Errorf("parse payload: %w", err)
 	}
@@ -128,7 +143,7 @@ func (s *ProcessEventsService) reconcile(ctx context.Context, ev domain.WebhookE
 	// Fingerprint failed jobs. This needs job traces, which are only available
 	// through the GitLab API, so it runs only when a client is configured.
 	if s.gitlab != nil && s.fingerprints != nil {
-		s.fingerprintFailedJobs(ctx, ev.ProjectID, gitlabProjectID, gljobs, jobIDs)
+		s.fingerprintFailedJobs(ctx, ev.ProjectID, gitlabProjectID, mergeRequestIID, gljobs, jobIDs)
 	}
 	return nil
 }
@@ -137,7 +152,7 @@ func (s *ProcessEventsService) reconcile(ctx context.Context, ev domain.WebhookE
 // resulting diagnosis. It is best-effort: a per-job failure (trace fetch,
 // persistence) is logged and skipped rather than failing the whole event, since
 // the pipeline/job state has already been persisted.
-func (s *ProcessEventsService) fingerprintFailedJobs(ctx context.Context, projectID domain.ProjectID, gitlabProjectID int64, gljobs []GitLabJob, jobIDs map[int64]string) {
+func (s *ProcessEventsService) fingerprintFailedJobs(ctx context.Context, projectID domain.ProjectID, gitlabProjectID, mergeRequestIID int64, gljobs []GitLabJob, jobIDs map[int64]string) {
 	for _, gj := range gljobs {
 		if gj.Status != failedJobStatus {
 			continue
@@ -165,11 +180,36 @@ func (s *ProcessEventsService) fingerprintFailedJobs(ctx context.Context, projec
 			Evidence:            diag.Evidence,
 			EvidenceHash:        diag.EvidenceHash,
 		}
-		if err := s.fingerprints.RecordOccurrence(ctx, occ); err != nil {
+		result, err := s.fingerprints.RecordOccurrence(ctx, occ)
+		if err != nil {
 			s.logger.Warn("record occurrence failed",
 				slog.Int64("gitlab_job_id", gj.ID), slog.String("error", err.Error()))
 			continue
 		}
+
+		s.maybeWriteBack(ctx, gitlabProjectID, mergeRequestIID, diag, result)
+	}
+}
+
+// maybeWriteBack posts the incident diagnosis to the merge request when
+// write-back is enabled, the pipeline is attached to an MR, and this call
+// recorded a new occurrence. It is best-effort: a post failure is logged (and
+// recorded as a failed comment inside the service), never failing the event.
+func (s *ProcessEventsService) maybeWriteBack(ctx context.Context, gitlabProjectID, mergeRequestIID int64, diag analysis.Diagnosis, result RecordOccurrenceResult) {
+	if s.writeBack == nil || mergeRequestIID <= 0 || !result.NewOccurrence {
+		return
+	}
+	_, err := s.writeBack.PostDiagnosis(ctx, WriteBackInput{
+		FingerprintID:   result.FingerprintID,
+		GitLabProjectID: gitlabProjectID,
+		MergeRequestIID: mergeRequestIID,
+		Category:        string(diag.Category),
+		SignatureLine:   diag.NormalizedSignature,
+		OccurrenceCount: result.OccurrenceCount,
+	})
+	if err != nil {
+		s.logger.Warn("merge-request write-back failed",
+			slog.Int64("merge_request_iid", mergeRequestIID), slog.String("error", err.Error()))
 	}
 }
 

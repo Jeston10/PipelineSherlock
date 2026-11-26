@@ -5,12 +5,13 @@ searchable, explainable failure incidents. The differentiator is **deterministic
 fingerprinting and evidence-backed diagnosis**, not a chat interface that guesses
 at root causes.
 
-> Status: **Milestones 0–4 complete; Milestone 5 (GitLab MR write-back) in
-> progress — slice 1 builds the write-back engine (idempotent `comments` store,
-> GitLab note POST, and the `WriteBackService` use case), fully unit-tested and
-> not yet wired into the worker.** Earlier milestones: GitLab ingestion (M1),
-> the deterministic failure-analysis engine (M2), incidents with occurrence
-> history and heuristic flaky/regression signals (M3), and a React + TypeScript
+> Status: **Milestones 0–5 complete — Milestone 5 (GitLab MR write-back) now
+> posts an incident diagnosis back to the merge request a failing pipeline
+> belongs to: a deterministic Markdown comment, idempotent per incident+MR, and
+> opt-in via `GITLAB_WRITEBACK_ENABLED` (slice 1 built the engine, slice 2 wired
+> it into the worker).** Earlier milestones: GitLab ingestion (M1), the
+> deterministic failure-analysis engine (M2), incidents with occurrence history
+> and heuristic flaky/regression signals (M3), and a React + TypeScript
 > dashboard that lists incidents and drills into an incident's detail (M4). This
 > is an early-stage portfolio project, not a production system. See
 > [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what is built and what is
@@ -202,14 +203,17 @@ web/                   # React + TypeScript dashboard (incidents list + detail +
   `(fingerprint_id, merge_request_iid)`, migration 0005), a GitLab
   `PostMergeRequestNote` client method, and a `WriteBackService` use case that
   enqueues → posts → marks posted/failed exactly once per incident+MR. The
-  comment body is a pure, deterministic Markdown function. Fully unit-tested;
-  not yet wired into the worker. See [docs/architecture.md](docs/architecture.md)
-  §17.
-- **Not yet built:** wiring write-back into the worker (detecting the MR from a
-  pipeline, config toggle — M5 slice 2), deep-linkable incident selection (URL
-  state), richer flaky/regression detection using success data and timing,
-  auth/RBAC, and any benchmark claims. No performance or scale numbers are
-  claimed.
+  comment body is a pure, deterministic Markdown function. Fully unit-tested.
+  See [docs/architecture.md](docs/architecture.md) §17.
+- **Built (M5 slice 2):** write-back wired into the worker — the pipeline webhook
+  parser now extracts `merge_request.iid`, `RecordOccurrence` returns the
+  fingerprint id + running count + new-occurrence flag, and the processor posts
+  the diagnosis (opt-in via `GITLAB_WRITEBACK_ENABLED`, and only with a GitLab
+  token) once per incident+MR. Best-effort — a post failure never fails the
+  event. See [docs/architecture.md](docs/architecture.md) §18.
+- **Not yet built:** deep-linkable incident selection (URL state), richer
+  flaky/regression detection using success data and timing, auth/RBAC, and any
+  benchmark claims. No performance or scale numbers are claimed.
 
 ## License
 

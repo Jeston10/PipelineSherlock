@@ -83,13 +83,24 @@ type FingerprintOccurrence struct {
 	EvidenceHash        string
 }
 
+// RecordOccurrenceResult reports what persisting an occurrence produced: the
+// fingerprint row id, the running occurrence count, and whether this call wrote
+// a genuinely new occurrence (false when it was a de-duplicated reprocess).
+type RecordOccurrenceResult struct {
+	FingerprintID   string
+	OccurrenceCount int64
+	NewOccurrence   bool
+}
+
 // FingerprintRepository persists deterministic failure fingerprints and their
 // occurrences.
 type FingerprintRepository interface {
 	// RecordOccurrence upserts the fingerprint and appends an occurrence for the
 	// job. It is idempotent per (job, fingerprint): recording the same job's
-	// failure twice adds no second occurrence and does not double-count.
-	RecordOccurrence(ctx context.Context, occ FingerprintOccurrence) error
+	// failure twice adds no second occurrence and does not double-count. The
+	// result carries the fingerprint id, the running count, and whether a new
+	// occurrence was written this call.
+	RecordOccurrence(ctx context.Context, occ FingerprintOccurrence) (RecordOccurrenceResult, error)
 }
 
 // IncidentRepository reads grouped failure incidents.

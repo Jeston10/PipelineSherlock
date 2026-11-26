@@ -738,6 +738,53 @@ a write-back toggle in `cmd/server`.
 
 ---
 
+## 18. Wiring write-back into the worker **[Built: M5 slice 2]**
+
+Slice 1 built the write-back engine in isolation; slice 2 connects it to the
+live failure path. When the worker fingerprints a failed job on a merge-request
+pipeline, and write-back is switched on, it now posts the diagnosis back to that
+merge request.
+
+```mermaid
+flowchart TD
+    PAYLOAD["parsePipelinePayload<br/>(+ merge_request.iid)"] --> RECON["reconcile"]
+    RECON --> FFJ["fingerprintFailedJobs"]
+    FFJ --> REC["FingerprintRepository.RecordOccurrence<br/>→ {fingerprint id, count, new?}"]
+    REC --> GATE{"write-back on?<br/>MR iid > 0?<br/>new occurrence?"}
+    GATE -->|no| STOP["skip write-back"]
+    GATE -->|yes| WB["WriteBackService.PostDiagnosis<br/>(§17 engine)"]
+    WB --> MR[("GitLab merge request<br/>comment")]
+
+    CFG["config.WriteBackActive()<br/>GITLAB_WRITEBACK_ENABLED + token"] -.enables.-> GATE
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class PAYLOAD,RECON,FFJ,REC,GATE,STOP,WB,MR,CFG built;
+```
+
+**Walkthrough.** Three things had to meet for the worker to drive write-back.
+First, the **MR iid**: `parsePipelinePayload` now reads `merge_request.iid` from
+the pipeline webhook body (0 when the pipeline is not attached to an MR). Second,
+the **fingerprint identity**: `RecordOccurrence` returns a
+`RecordOccurrenceResult` — the fingerprint row id, the running occurrence count,
+and whether this call wrote a *new* occurrence — so the processor has exactly
+what `WriteBackInput` needs without a second read. Third, the **switch**:
+`config.WriteBackActive()` requires both `GITLAB_WRITEBACK_ENABLED` and a GitLab
+token, and `cmd/server` passes `application.WithWriteBack(...)` to the processor
+only then.
+
+`maybeWriteBack` fires only when all three hold — write-back enabled, `MR iid >
+0`, and a new occurrence — then calls the §17 engine. Gating on *new occurrence*
+avoids redundant work on reprocess, while the engine's own
+`(fingerprint, MR)` idempotency remains the true guard against duplicate
+comments (a recurrence of the same fingerprint on the same MR is enqueued, sees
+the existing row, and skips). Write-back is best-effort: a post failure is logged
+and recorded as a failed comment, never failing the event, because the
+pipeline/job/fingerprint state is already persisted. The default build (no token,
+or the flag off) behaves exactly as before — the processor is constructed with no
+write-back option.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

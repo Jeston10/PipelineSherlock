@@ -56,6 +56,54 @@ func TestLoad_GitLabConfigured(t *testing.T) {
 	}
 }
 
+func TestLoad_WriteBack(t *testing.T) {
+	tests := []struct {
+		name      string
+		env       map[string]string
+		wantFlag  bool
+		wantActiv bool
+	}{
+		{
+			name:      "disabled by default",
+			env:       map[string]string{"DATABASE_URL": "postgres://localhost/ps"},
+			wantFlag:  false,
+			wantActiv: false,
+		},
+		{
+			name:      "flag set but no token is not active",
+			env:       map[string]string{"DATABASE_URL": "postgres://localhost/ps", "GITLAB_WRITEBACK_ENABLED": "true"},
+			wantFlag:  true,
+			wantActiv: false,
+		},
+		{
+			name:      "flag set with token is active",
+			env:       map[string]string{"DATABASE_URL": "postgres://localhost/ps", "GITLAB_TOKEN": "glpat-x", "GITLAB_WRITEBACK_ENABLED": "true"},
+			wantFlag:  true,
+			wantActiv: true,
+		},
+		{
+			name:      "unparseable flag is off",
+			env:       map[string]string{"DATABASE_URL": "postgres://localhost/ps", "GITLAB_TOKEN": "glpat-x", "GITLAB_WRITEBACK_ENABLED": "yep"},
+			wantFlag:  false,
+			wantActiv: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(envMap(tt.env))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.WriteBackEnabled != tt.wantFlag {
+				t.Errorf("WriteBackEnabled = %v, want %v", cfg.WriteBackEnabled, tt.wantFlag)
+			}
+			if cfg.WriteBackActive() != tt.wantActiv {
+				t.Errorf("WriteBackActive() = %v, want %v", cfg.WriteBackActive(), tt.wantActiv)
+			}
+		})
+	}
+}
+
 func TestLoad_Validation(t *testing.T) {
 	tests := []struct {
 		name    string

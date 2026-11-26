@@ -70,14 +70,18 @@ type fakeFingerprintRepo struct {
 	err         error
 }
 
-func (r *fakeFingerprintRepo) RecordOccurrence(_ context.Context, occ FingerprintOccurrence) error {
+func (r *fakeFingerprintRepo) RecordOccurrence(_ context.Context, occ FingerprintOccurrence) (RecordOccurrenceResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.err != nil {
-		return r.err
+		return RecordOccurrenceResult{}, r.err
 	}
 	r.occurrences = append(r.occurrences, occ)
-	return nil
+	return RecordOccurrenceResult{
+		FingerprintID:   "fp-" + occ.Fingerprint,
+		OccurrenceCount: int64(len(r.occurrences)),
+		NewOccurrence:   true,
+	}, nil
 }
 
 func (r *fakeFingerprintRepo) count() int {
@@ -218,6 +222,65 @@ func TestProcessNext_FingerprintBestEffortOnTraceError(t *testing.T) {
 	}
 	if events.events[0].Status != domain.WebhookStatusProcessed {
 		t.Errorf("event status = %q, want processed", events.events[0].Status)
+	}
+}
+
+func TestProcessNext_WriteBackOnMergeRequestPipeline(t *testing.T) {
+	ctx := context.Background()
+	events := newFakeEventRepo()
+	pipelines := &fakePipelineRepo{}
+	fingerprints := &fakeFingerprintRepo{}
+
+	const mrPayload = `{
+		"object_kind":"pipeline",
+		"project":{"id":1001},
+		"object_attributes":{"id":55,"ref":"feature","sha":"abc","status":"failed"},
+		"merge_request":{"iid":42},
+		"builds":[{"id":9,"name":"test","stage":"test","status":"failed"}]
+	}`
+	mustInsert(t, events, "Pipeline Hook", mrPayload)
+
+	gitlab := fakeGitLabClient{
+		pipeline: GitLabPipeline{ID: 55, Ref: "feature", SHA: "abc", Status: "failed"},
+		jobs:     []GitLabJob{{ID: 9, Name: "test", Stage: "test", Status: "failed"}},
+		trace:    "--- FAIL: TestLogin (0.01s)\n    login_test.go:21: status = 500, want 200",
+	}
+	commenter := &stubCommenter{noteID: 7}
+	wb := NewWriteBackService(&stubCommentRepo{enqueueID: "c1", enqueueCreated: true}, commenter, nil)
+	svc := NewProcessEventsService(events, pipelines, fingerprints, gitlab, nil, WithWriteBack(wb))
+
+	if _, err := svc.ProcessNext(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if commenter.calls != 1 {
+		t.Fatalf("write-back posts = %d, want 1", commenter.calls)
+	}
+	if commenter.lastProjectID != 1001 || commenter.lastMRIID != 42 {
+		t.Errorf("posted to project/mr %d/%d, want 1001/42", commenter.lastProjectID, commenter.lastMRIID)
+	}
+}
+
+func TestProcessNext_NoWriteBackWithoutMergeRequest(t *testing.T) {
+	ctx := context.Background()
+	events := newFakeEventRepo()
+	pipelines := &fakePipelineRepo{}
+	fingerprints := &fakeFingerprintRepo{}
+	mustInsert(t, events, "Pipeline Hook", pipelinePayloadJSON) // payload carries no merge_request
+
+	gitlab := fakeGitLabClient{
+		pipeline: GitLabPipeline{ID: 55, Ref: "main", SHA: "deadbeef", Status: "failed"},
+		jobs:     []GitLabJob{{ID: 9, Name: "test", Stage: "test", Status: "failed"}},
+		trace:    "--- FAIL: TestLogin",
+	}
+	commenter := &stubCommenter{noteID: 7}
+	wb := NewWriteBackService(&stubCommentRepo{enqueueID: "c1", enqueueCreated: true}, commenter, nil)
+	svc := NewProcessEventsService(events, pipelines, fingerprints, gitlab, nil, WithWriteBack(wb))
+
+	if _, err := svc.ProcessNext(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if commenter.calls != 0 {
+		t.Errorf("write-back posts = %d, want 0 (no merge request)", commenter.calls)
 	}
 }
 

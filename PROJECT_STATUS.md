@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-25 (M5 slice 1)
+Last updated: 2026-11-26 (M5 slice 2)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -227,9 +227,9 @@ coverage 89% overall with every source file ≥80% statements.
 Verified locally: `npm run build` clean; `npm test` 30/30 pass; coverage 92.7%
 overall with every source file ≥80% statements.
 
-## Milestone 5 — GitLab MR write-back 🚧 in progress
+## Milestone 5 — GitLab MR write-back ✅ complete
 
-### Slice 1 — write-back engine ✅ done (this slice)
+### Slice 1 — write-back engine ✅ done
 
 - `migrations/0005_comments_idempotency.{up,down}.sql`: a unique constraint on
   `comments (fingerprint_id, merge_request_iid)` so write-back is idempotent —
@@ -257,6 +257,28 @@ overall with every source file ≥80% statements.
 Verified locally: `gofmt` clean, `go vet ./...` and `go build ./...` pass,
 `go test ./...` green, and the `-tags=integration` tests compile.
 
+### Slice 2 — wiring write-back into the worker ✅ done (this slice)
+
+- `config`: `GITLAB_WRITEBACK_ENABLED` opt-in flag + `WriteBackActive()` (needs
+  the flag and a GitLab token); included in the redacted startup log. Tested.
+- `webhook_payload`: `parsePipelinePayload` now extracts `merge_request.iid`
+  (0 when the pipeline is not attached to an MR). Table-driven tests.
+- `FingerprintRepository.RecordOccurrence` returns a `RecordOccurrenceResult`
+  (fingerprint id, running occurrence count, new-occurrence flag); postgres impl
+  and the fake updated.
+- `ProcessEventsService`: a `WithWriteBack(...)` option (variadic, so existing
+  call sites are unchanged) and `maybeWriteBack`, which posts the diagnosis when
+  write-back is on, the MR iid is present, and the occurrence is new — best
+  effort, never failing the event. Tests: posts on an MR pipeline, skips without
+  an MR.
+- `cmd/server`: constructs the write-back service and passes the option only
+  when `WriteBackActive()`.
+- `.env.example`: documents `GITLAB_WRITEBACK_ENABLED`.
+
+Verified locally: `gofmt` clean, `go vet ./...` and `go build ./...` pass,
+`go test ./...` green, and the `-tags=integration` tests compile. See
+[docs/architecture.md](docs/architecture.md) §18.
+
 ## Next: polish & cross-cutting
 
 - Deep-linkable incident selection (URL state) so a detail view is shareable.
@@ -264,9 +286,9 @@ Verified locally: `gofmt` clean, `go vet ./...` and `go build ./...` pass,
 
 ## Later milestones
 
-- M5 slice 2: detect the MR iid from the pipeline/webhook, wire
-  `WriteBackService` into the worker, and gate it behind a write-back toggle in
-  `cmd/server`.
+- Cross-cutting: auth/RBAC, rate limiting, observability, richer flaky/
+  regression detection using success data and timing, and bumping CI off the
+  deprecated Node 20 GitHub Actions.
 - Cross-cutting: auth/RBAC, rate limiting, observability, richer flaky/
   regression detection using success data and timing, and bumping CI off the
   deprecated Node 20 GitHub Actions.

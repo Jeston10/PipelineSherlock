@@ -25,10 +25,12 @@ var _ application.FingerprintRepository = (*FingerprintRepo)(nil)
 // job, all in one transaction. The occurrence insert is idempotent on
 // (job_id, fingerprint_id); occurrence_count is incremented only when a new
 // occurrence row is actually written, so reprocessing never double-counts.
-func (r *FingerprintRepo) RecordOccurrence(ctx context.Context, occ application.FingerprintOccurrence) error {
+func (r *FingerprintRepo) RecordOccurrence(ctx context.Context, occ application.FingerprintOccurrence) (application.RecordOccurrenceResult, error) {
+	var zero application.RecordOccurrenceResult
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return zero, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
 
@@ -43,7 +45,7 @@ RETURNING id`
 	if err := tx.QueryRow(ctx, fingerprintQ,
 		string(occ.ProjectID), occ.Fingerprint, occ.Category, occ.NormalizedSignature, occ.AlgorithmVersion,
 	).Scan(&fingerprintID); err != nil {
-		return fmt.Errorf("upsert fingerprint: %w", err)
+		return zero, fmt.Errorf("upsert fingerprint: %w", err)
 	}
 
 	const occurrenceQ = `
@@ -55,19 +57,30 @@ ON CONFLICT (job_id, fingerprint_id) DO NOTHING`
 		occ.JobID, fingerprintID, occ.Category, occ.Evidence, occ.EvidenceHash,
 	)
 	if err != nil {
-		return fmt.Errorf("insert occurrence: %w", err)
+		return zero, fmt.Errorf("insert occurrence: %w", err)
 	}
 
 	// Only count a genuinely new occurrence.
-	if tag.RowsAffected() == 1 {
-		const bumpQ = `UPDATE failure_fingerprints SET occurrence_count = occurrence_count + 1 WHERE id = $1`
-		if _, err := tx.Exec(ctx, bumpQ, fingerprintID); err != nil {
-			return fmt.Errorf("increment occurrence count: %w", err)
+	newOccurrence := tag.RowsAffected() == 1
+	var occurrenceCount int64
+	if newOccurrence {
+		const bumpQ = `UPDATE failure_fingerprints SET occurrence_count = occurrence_count + 1 WHERE id = $1 RETURNING occurrence_count`
+		if err := tx.QueryRow(ctx, bumpQ, fingerprintID).Scan(&occurrenceCount); err != nil {
+			return zero, fmt.Errorf("increment occurrence count: %w", err)
+		}
+	} else {
+		const readQ = `SELECT occurrence_count FROM failure_fingerprints WHERE id = $1`
+		if err := tx.QueryRow(ctx, readQ, fingerprintID).Scan(&occurrenceCount); err != nil {
+			return zero, fmt.Errorf("read occurrence count: %w", err)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
+		return zero, fmt.Errorf("commit tx: %w", err)
 	}
-	return nil
+	return application.RecordOccurrenceResult{
+		FingerprintID:   fingerprintID,
+		OccurrenceCount: occurrenceCount,
+		NewOccurrence:   newOccurrence,
+	}, nil
 }

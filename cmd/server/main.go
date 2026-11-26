@@ -95,13 +95,22 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	// The background worker reconciles inbox events against GitLab when a token
 	// is configured; otherwise it falls back to the webhook payload.
 	var gitlabClient application.GitLabClient
+	var procOpts []application.ProcessOption
 	if cfg.GitLabConfigured() {
-		gitlabClient = gitlabadapter.New(cfg.GitLabBaseURL, cfg.GitLabToken)
+		client := gitlabadapter.New(cfg.GitLabBaseURL, cfg.GitLabToken)
+		gitlabClient = client
 		logger.Info("gitlab reconciliation enabled", slog.String("base_url", cfg.GitLabBaseURL))
+
+		// Merge-request write-back is opt-in and needs the GitLab API to post.
+		if cfg.WriteBackActive() {
+			writeBack := application.NewWriteBackService(pgrepo.NewCommentRepo(db.Pool), client, logger)
+			procOpts = append(procOpts, application.WithWriteBack(writeBack))
+			logger.Info("gitlab merge-request write-back enabled")
+		}
 	} else {
 		logger.Info("gitlab reconciliation disabled (no GITLAB_TOKEN); using webhook payloads only")
 	}
-	processor := application.NewProcessEventsService(eventRepo, pipelineRepo, fingerprintRepo, gitlabClient, logger)
+	processor := application.NewProcessEventsService(eventRepo, pipelineRepo, fingerprintRepo, gitlabClient, logger, procOpts...)
 	worker := application.NewWorker(processor, logger)
 
 	handler := transporthttp.NewRouter(transporthttp.Deps{
