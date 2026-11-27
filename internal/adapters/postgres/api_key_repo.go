@@ -29,13 +29,13 @@ var _ application.APIKeyRepository = (*APIKeyRepo)(nil)
 // and created_at.
 func (r *APIKeyRepo) Create(ctx context.Context, k domain.APIKey) (domain.APIKey, error) {
 	const q = `
-INSERT INTO api_keys (name, key_hash)
-VALUES ($1, $2)
+INSERT INTO api_keys (name, owner_id, key_hash)
+VALUES ($1, $2, $3)
 RETURNING id, created_at`
 
 	var id string
 	createdAt := k.CreatedAt
-	row := r.pool.QueryRow(ctx, q, k.Name, k.KeyHash)
+	row := r.pool.QueryRow(ctx, q, k.Name, k.OwnerID, k.KeyHash)
 	if err := row.Scan(&id, &createdAt); err != nil {
 		return domain.APIKey{}, fmt.Errorf("insert api key: %w", err)
 	}
@@ -48,7 +48,7 @@ RETURNING id, created_at`
 // (nil error) when no key matches.
 func (r *APIKeyRepo) FindByHash(ctx context.Context, keyHash string) (domain.APIKey, bool, error) {
 	const q = `
-SELECT id, name, key_hash, created_at, last_used_at
+SELECT id, name, owner_id, key_hash, created_at, last_used_at
 FROM api_keys
 WHERE key_hash = $1`
 
@@ -56,7 +56,7 @@ WHERE key_hash = $1`
 	var id string
 	var lastUsed *time.Time
 	row := r.pool.QueryRow(ctx, q, keyHash)
-	if err := row.Scan(&id, &k.Name, &k.KeyHash, &k.CreatedAt, &lastUsed); err != nil {
+	if err := row.Scan(&id, &k.Name, &k.OwnerID, &k.KeyHash, &k.CreatedAt, &lastUsed); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.APIKey{}, false, nil
 		}

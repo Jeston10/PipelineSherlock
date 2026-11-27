@@ -21,6 +21,8 @@ var (
 	ErrAPIKeyNameTooLong = fmt.Errorf("%w: name exceeds maximum length", ErrInvalidAPIKey)
 	// ErrEmptyAPIKeyHash is returned when no key hash is supplied.
 	ErrEmptyAPIKeyHash = fmt.Errorf("%w: key hash required", ErrInvalidAPIKey)
+	// ErrEmptyAPIKeyOwner is returned when no owner (tenant) is supplied.
+	ErrEmptyAPIKeyOwner = fmt.Errorf("%w: owner required", ErrInvalidAPIKey)
 )
 
 // APIKey is a credential that authenticates callers of the /api/v1 surface.
@@ -29,22 +31,28 @@ var (
 type APIKey struct {
 	ID         string
 	Name       string
+	OwnerID    string
 	KeyHash    string
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 }
 
-// NewAPIKey builds a key record from a label and the hash of its secret,
-// validating the identity needed to persist and later match it.
-func NewAPIKey(name, keyHash string) (APIKey, error) {
-	trimmed := strings.TrimSpace(name)
+// NewAPIKey builds a key record from a label, its owner, and the hash of its
+// secret, validating the identity needed to persist and later match it. Every
+// key belongs to an owner (tenant); authorization scopes access off this value.
+func NewAPIKey(name, ownerID, keyHash string) (APIKey, error) {
+	trimmedName := strings.TrimSpace(name)
+	trimmedOwner := strings.TrimSpace(ownerID)
 
 	var problems []error
-	if trimmed == "" {
+	if trimmedName == "" {
 		problems = append(problems, ErrEmptyAPIKeyName)
 	}
-	if len(trimmed) > maxAPIKeyNameLen {
+	if len(trimmedName) > maxAPIKeyNameLen {
 		problems = append(problems, ErrAPIKeyNameTooLong)
+	}
+	if trimmedOwner == "" {
+		problems = append(problems, ErrEmptyAPIKeyOwner)
 	}
 	if keyHash == "" {
 		problems = append(problems, ErrEmptyAPIKeyHash)
@@ -52,5 +60,5 @@ func NewAPIKey(name, keyHash string) (APIKey, error) {
 	if len(problems) > 0 {
 		return APIKey{}, errors.Join(problems...)
 	}
-	return APIKey{Name: trimmed, KeyHash: keyHash}, nil
+	return APIKey{Name: trimmedName, OwnerID: trimmedOwner, KeyHash: keyHash}, nil
 }

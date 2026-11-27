@@ -41,12 +41,15 @@ func (r *fakeIncidentRepo) ListOccurrences(_ context.Context, fingerprintID stri
 	return r.occurrences, nil
 }
 
+const testOwner = "acme"
+
 func registerProjectForTest(t *testing.T, projects *fakeProjectRepo, gitlabID int64) domain.Project {
 	t.Helper()
 	p, err := domain.NewProject(gitlabID, "svc", "team")
 	if err != nil {
 		t.Fatalf("new project: %v", err)
 	}
+	p = p.WithOwner(testOwner)
 	stored, err := projects.Create(context.Background(), p)
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -64,7 +67,7 @@ func TestIncidentService_List(t *testing.T) {
 	}}
 	svc := NewIncidentService(projects, incidents)
 
-	got, err := svc.List(ctx, 1001, 0)
+	got, err := svc.List(ctx, testOwner, 1001, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -83,7 +86,7 @@ func TestIncidentService_UnknownProject(t *testing.T) {
 	projects := newFakeProjectRepo()
 	svc := NewIncidentService(projects, &fakeIncidentRepo{})
 
-	_, err := svc.List(context.Background(), 9999, 10)
+	_, err := svc.List(context.Background(), testOwner, 9999, 10)
 	if !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}
@@ -95,7 +98,7 @@ func TestIncidentService_ClampsLimit(t *testing.T) {
 	incidents := &fakeIncidentRepo{}
 	svc := NewIncidentService(projects, incidents)
 
-	if _, err := svc.List(context.Background(), 1001, 500); err != nil {
+	if _, err := svc.List(context.Background(), testOwner, 1001, 500); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if incidents.gotLimit != maxIncidentLimit {
@@ -119,7 +122,7 @@ func TestIncidentService_Detail(t *testing.T) {
 	}
 	svc := NewIncidentService(projects, incidents)
 
-	got, err := svc.Detail(ctx, 1001, "abc", 0)
+	got, err := svc.Detail(ctx, testOwner, 1001, "abc", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,11 +148,31 @@ func TestIncidentService_Detail(t *testing.T) {
 	}
 }
 
+func TestIncidentService_CrossOwnerHidden(t *testing.T) {
+	ctx := context.Background()
+	projects := newFakeProjectRepo()
+	registerProjectForTest(t, projects, 1001) // owned by testOwner
+	incidents := &fakeIncidentRepo{
+		incidents:   []domain.Incident{{FingerprintID: "fp1"}},
+		header:      domain.Incident{FingerprintID: "fp1", Fingerprint: "abc"},
+		headerFound: true,
+	}
+	svc := NewIncidentService(projects, incidents)
+
+	// A different owner must not be able to tell the project exists.
+	if _, err := svc.List(ctx, "someone-else", 1001, 0); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("List cross-owner err = %v, want ErrProjectNotFound", err)
+	}
+	if _, err := svc.Detail(ctx, "someone-else", 1001, "abc", 0); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("Detail cross-owner err = %v, want ErrProjectNotFound", err)
+	}
+}
+
 func TestIncidentService_Detail_UnknownProject(t *testing.T) {
 	projects := newFakeProjectRepo()
 	svc := NewIncidentService(projects, &fakeIncidentRepo{})
 
-	_, err := svc.Detail(context.Background(), 9999, "abc", 0)
+	_, err := svc.Detail(context.Background(), testOwner, 9999, "abc", 0)
 	if !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}
@@ -161,7 +184,7 @@ func TestIncidentService_Detail_UnknownFingerprint(t *testing.T) {
 	// headerFound defaults to false -> incident not found.
 	svc := NewIncidentService(projects, &fakeIncidentRepo{})
 
-	_, err := svc.Detail(context.Background(), 1001, "missing", 0)
+	_, err := svc.Detail(context.Background(), testOwner, 1001, "missing", 0)
 	if !errors.Is(err, ErrIncidentNotFound) {
 		t.Fatalf("err = %v, want ErrIncidentNotFound", err)
 	}
@@ -173,7 +196,7 @@ func TestIncidentService_Detail_ClampsOccurrenceLimit(t *testing.T) {
 	incidents := &fakeIncidentRepo{header: domain.Incident{FingerprintID: "fp-id"}, headerFound: true}
 	svc := NewIncidentService(projects, incidents)
 
-	if _, err := svc.Detail(context.Background(), 1001, "abc", 9000); err != nil {
+	if _, err := svc.Detail(context.Background(), testOwner, 1001, "abc", 9000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if incidents.gotOccurrenceLim != maxOccurrenceLimit {

@@ -29,11 +29,12 @@ type RegisterProjectResult struct {
 // Register validates the inputs, generates a webhook secret, persists the
 // project with only the secret's hash, and returns the project plus the
 // plaintext secret for one-time display.
-func (s *RegisterProjectService) Register(ctx context.Context, gitlabProjectID int64, name, namespace string) (RegisterProjectResult, error) {
+func (s *RegisterProjectService) Register(ctx context.Context, ownerID string, gitlabProjectID int64, name, namespace string) (RegisterProjectResult, error) {
 	project, err := domain.NewProject(gitlabProjectID, name, namespace)
 	if err != nil {
 		return RegisterProjectResult{}, err
 	}
+	project = project.WithOwner(ownerID)
 
 	secret, err := token.Generate()
 	if err != nil {
@@ -49,7 +50,7 @@ func (s *RegisterProjectService) Register(ctx context.Context, gitlabProjectID i
 	return RegisterProjectResult{Project: stored, WebhookSecret: secret}, nil
 }
 
-// List returns all registered projects.
-func (s *RegisterProjectService) List(ctx context.Context) ([]domain.Project, error) {
-	return s.projects.List(ctx)
+// List returns the registered projects owned by the given tenant.
+func (s *RegisterProjectService) List(ctx context.Context, ownerID string) ([]domain.Project, error) {
+	return s.projects.ListByOwner(ctx, ownerID)
 }

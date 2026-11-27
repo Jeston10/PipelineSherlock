@@ -34,13 +34,13 @@ var _ application.ProjectRepository = (*ProjectRepo)(nil)
 
 func (r *ProjectRepo) Create(ctx context.Context, p domain.Project) (domain.Project, error) {
 	const q = `
-INSERT INTO projects (gitlab_project_id, name, namespace, webhook_secret_hash)
-VALUES ($1, $2, $3, $4)
+INSERT INTO projects (gitlab_project_id, name, namespace, owner_id, webhook_secret_hash)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, created_at`
 
 	var id string
 	createdAt := p.CreatedAt
-	row := r.pool.QueryRow(ctx, q, p.GitLabProjectID, p.Name, p.Namespace, p.WebhookSecretHash)
+	row := r.pool.QueryRow(ctx, q, p.GitLabProjectID, p.Name, p.Namespace, p.OwnerID, p.WebhookSecretHash)
 	if err := row.Scan(&id, &createdAt); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
@@ -53,14 +53,14 @@ RETURNING id, created_at`
 
 func (r *ProjectRepo) GetByGitLabID(ctx context.Context, gitlabProjectID int64) (domain.Project, bool, error) {
 	const q = `
-SELECT id, gitlab_project_id, name, namespace, COALESCE(webhook_secret_hash, ''), created_at
+SELECT id, gitlab_project_id, name, namespace, owner_id, COALESCE(webhook_secret_hash, ''), created_at
 FROM projects
 WHERE gitlab_project_id = $1`
 
 	var p domain.Project
 	var id string
 	row := r.pool.QueryRow(ctx, q, gitlabProjectID)
-	if err := row.Scan(&id, &p.GitLabProjectID, &p.Name, &p.Namespace, &p.WebhookSecretHash, &p.CreatedAt); err != nil {
+	if err := row.Scan(&id, &p.GitLabProjectID, &p.Name, &p.Namespace, &p.OwnerID, &p.WebhookSecretHash, &p.CreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Project{}, false, nil
 		}
@@ -70,13 +70,14 @@ WHERE gitlab_project_id = $1`
 	return p, true, nil
 }
 
-func (r *ProjectRepo) List(ctx context.Context) ([]domain.Project, error) {
+func (r *ProjectRepo) ListByOwner(ctx context.Context, ownerID string) ([]domain.Project, error) {
 	const q = `
-SELECT id, gitlab_project_id, name, namespace, COALESCE(webhook_secret_hash, ''), created_at
+SELECT id, gitlab_project_id, name, namespace, owner_id, COALESCE(webhook_secret_hash, ''), created_at
 FROM projects
+WHERE owner_id = $1
 ORDER BY created_at DESC`
 
-	rows, err := r.pool.Query(ctx, q)
+	rows, err := r.pool.Query(ctx, q, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -86,7 +87,7 @@ ORDER BY created_at DESC`
 	for rows.Next() {
 		var p domain.Project
 		var id string
-		if err := rows.Scan(&id, &p.GitLabProjectID, &p.Name, &p.Namespace, &p.WebhookSecretHash, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&id, &p.GitLabProjectID, &p.Name, &p.Namespace, &p.OwnerID, &p.WebhookSecretHash, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
 		p.ID = domain.ProjectID(id)

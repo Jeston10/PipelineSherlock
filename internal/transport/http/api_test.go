@@ -19,10 +19,10 @@ type fakeProjectService struct {
 	list   []domain.Project
 }
 
-func (f fakeProjectService) Register(context.Context, int64, string, string) (application.RegisterProjectResult, error) {
+func (f fakeProjectService) Register(context.Context, string, int64, string, string) (application.RegisterProjectResult, error) {
 	return f.result, f.err
 }
-func (f fakeProjectService) List(context.Context) ([]domain.Project, error) {
+func (f fakeProjectService) List(context.Context, string) ([]domain.Project, error) {
 	return f.list, nil
 }
 

@@ -10,3 +10,20 @@ func RequestIDFromContext(ctx context.Context) string {
 	}
 	return ""
 }
+
+const ownerIDKey contextKey = "owner_id"
+
+// contextWithOwnerID stores the authenticated caller's owner (tenant) id so
+// handlers can scope their work to it.
+func contextWithOwnerID(ctx context.Context, ownerID string) context.Context {
+	return context.WithValue(ctx, ownerIDKey, ownerID)
+}
+
+// OwnerIDFromContext returns the authenticated caller's owner id, or an empty
+// string when the request was not authenticated.
+func OwnerIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ownerIDKey).(string); ok {
+		return v
+	}
+	return ""
+}

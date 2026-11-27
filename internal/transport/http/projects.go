@@ -47,7 +47,7 @@ func (h *apiHandlers) registerProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.deps.Projects.Register(r.Context(), req.GitLabProjectID, req.Name, req.Namespace)
+	res, err := h.deps.Projects.Register(r.Context(), OwnerIDFromContext(r.Context()), req.GitLabProjectID, req.Name, req.Namespace)
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrInvalidProject):
@@ -71,7 +71,7 @@ func (h *apiHandlers) registerProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *apiHandlers) listProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := h.deps.Projects.List(r.Context())
+	projects, err := h.deps.Projects.List(r.Context(), OwnerIDFromContext(r.Context()))
 	if err != nil {
 		h.logger.Error("list projects failed", slog.String("error", err.Error()))
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})

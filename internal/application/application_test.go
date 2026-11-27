@@ -37,10 +37,12 @@ func (r *fakeProjectRepo) GetByGitLabID(_ context.Context, id int64) (domain.Pro
 	return p, ok, nil
 }
 
-func (r *fakeProjectRepo) List(_ context.Context) ([]domain.Project, error) {
+func (r *fakeProjectRepo) ListByOwner(_ context.Context, ownerID string) ([]domain.Project, error) {
 	out := make([]domain.Project, 0, len(r.byGitLabID))
 	for _, p := range r.byGitLabID {
-		out = append(out, p)
+		if p.OwnerID == ownerID {
+			out = append(out, p)
+		}
 	}
 	return out, nil
 }
@@ -139,12 +141,15 @@ func TestRegisterProject_StoresHashNotPlaintext(t *testing.T) {
 	repo := newFakeProjectRepo()
 	svc := NewRegisterProjectService(repo)
 
-	res, err := svc.Register(context.Background(), 1001, "checkout-service", "team/platform")
+	res, err := svc.Register(context.Background(), "acme", 1001, "checkout-service", "team/platform")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.WebhookSecret == "" {
 		t.Fatal("expected a webhook secret to be returned")
+	}
+	if res.Project.OwnerID != "acme" {
+		t.Errorf("project owner = %q, want acme", res.Project.OwnerID)
 	}
 	if !res.Project.IsPersisted() {
 		t.Error("returned project should be persisted")
@@ -163,7 +168,7 @@ func TestIngestWebhook(t *testing.T) {
 	events := newFakeEventRepo()
 
 	reg := NewRegisterProjectService(projects)
-	res, err := reg.Register(ctx, 1001, "svc", "team")
+	res, err := reg.Register(ctx, "acme", 1001, "svc", "team")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}

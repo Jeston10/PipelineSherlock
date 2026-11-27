@@ -52,6 +52,10 @@ type Project struct {
 	Name string
 	// Namespace is the GitLab group/namespace path (e.g. "team/platform").
 	Namespace string
+	// OwnerID is the tenant that owns this project. Authorization scopes reads
+	// and writes to the caller whose API key carries the same owner. Empty means
+	// legacy/unowned and matches no authenticated caller.
+	OwnerID string
 	// WebhookSecretHash is the hash of the project's webhook token. Empty means
 	// no secret has been set and webhook delivery must be rejected. The
 	// plaintext token is never stored on the entity.
@@ -109,6 +113,13 @@ func (p Project) WithPersistence(id ProjectID, createdAt time.Time) Project {
 
 // IsPersisted reports whether the project has been assigned a stable identity.
 func (p Project) IsPersisted() bool { return p.ID != "" }
+
+// WithOwner returns a copy of the project owned by the given tenant. The
+// receiver is not modified.
+func (p Project) WithOwner(ownerID string) Project {
+	p.OwnerID = ownerID
+	return p
+}
 
 // WithWebhookSecretHash returns a copy of the project carrying the given
 // webhook secret hash. The receiver is not modified.

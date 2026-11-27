@@ -28,11 +28,12 @@ type ProjectRepository interface {
 	// Create inserts a new project and returns it with its assigned ID and
 	// CreatedAt. It returns ErrProjectAlreadyExists if the GitLab id is taken.
 	Create(ctx context.Context, p domain.Project) (domain.Project, error)
-	// GetByGitLabID returns the project with the given GitLab project id.
-	// found is false (with a nil error) when no such project exists.
+	// GetByGitLabID returns the project with the given GitLab project id,
+	// including its OwnerID for authorization scoping. found is false (with a nil
+	// error) when no such project exists.
 	GetByGitLabID(ctx context.Context, gitlabProjectID int64) (project domain.Project, found bool, err error)
-	// List returns all registered projects.
-	List(ctx context.Context) ([]domain.Project, error)
+	// ListByOwner returns the registered projects owned by the given tenant.
+	ListByOwner(ctx context.Context, ownerID string) ([]domain.Project, error)
 }
 
 // WebhookEventRepository persists inbox events idempotently and hands them out

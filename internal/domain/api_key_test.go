@@ -23,7 +23,7 @@ func TestNewAPIKey(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			key, err := NewAPIKey(tc.label, tc.keyHash)
+			key, err := NewAPIKey(tc.label, "acme", tc.keyHash)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("error = %v, want %v", err, tc.wantErr)
@@ -42,6 +42,15 @@ func TestNewAPIKey(t *testing.T) {
 			if key.KeyHash != tc.keyHash {
 				t.Errorf("key hash = %q, want %q", key.KeyHash, tc.keyHash)
 			}
+			if key.OwnerID != "acme" {
+				t.Errorf("owner = %q, want acme", key.OwnerID)
+			}
 		})
+	}
+}
+
+func TestNewAPIKey_MissingOwner(t *testing.T) {
+	if _, err := NewAPIKey("ci-dashboard", "  ", "abc123hash"); !errors.Is(err, ErrEmptyAPIKeyOwner) {
+		t.Fatalf("err = %v, want ErrEmptyAPIKeyOwner", err)
 	}
 }

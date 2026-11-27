@@ -32,7 +32,7 @@ func (h *apiHandlers) listIncidents(w http.ResponseWriter, r *http.Request) {
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit")) // 0 (and negatives) → service default
 
-	incidents, err := h.deps.Incidents.List(r.Context(), gitlabID, limit)
+	incidents, err := h.deps.Incidents.List(r.Context(), OwnerIDFromContext(r.Context()), gitlabID, limit)
 	if err != nil {
 		switch {
 		case errors.Is(err, application.ErrProjectNotFound):
@@ -118,7 +118,7 @@ func (h *apiHandlers) getIncident(w http.ResponseWriter, r *http.Request) {
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit")) // 0 (and negatives) → service default
 
-	detail, err := h.deps.Incidents.Detail(r.Context(), gitlabID, fingerprint, limit)
+	detail, err := h.deps.Incidents.Detail(r.Context(), OwnerIDFromContext(r.Context()), gitlabID, fingerprint, limit)
 	if err != nil {
 		switch {
 		case errors.Is(err, application.ErrProjectNotFound):

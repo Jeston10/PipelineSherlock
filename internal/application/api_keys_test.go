@@ -43,12 +43,15 @@ func TestAPIKeyService_Issue_StoresHashNotPlaintext(t *testing.T) {
 	repo := newFakeAPIKeyRepo()
 	svc := NewAPIKeyService(repo)
 
-	res, err := svc.Issue(context.Background(), "ci-dashboard")
+	res, err := svc.Issue(context.Background(), "ci-dashboard", "acme")
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	if res.PlaintextKey == "" {
 		t.Fatal("plaintext key must be returned once")
+	}
+	if repo.lastStored.OwnerID != "acme" {
+		t.Errorf("stored owner = %q, want acme", repo.lastStored.OwnerID)
 	}
 	if repo.lastStored.KeyHash == res.PlaintextKey {
 		t.Fatal("stored value must be a hash, never the plaintext")
@@ -63,7 +66,14 @@ func TestAPIKeyService_Issue_StoresHashNotPlaintext(t *testing.T) {
 
 func TestAPIKeyService_Issue_InvalidName(t *testing.T) {
 	svc := NewAPIKeyService(newFakeAPIKeyRepo())
-	if _, err := svc.Issue(context.Background(), "   "); !errors.Is(err, domain.ErrInvalidAPIKey) {
+	if _, err := svc.Issue(context.Background(), "   ", "acme"); !errors.Is(err, domain.ErrInvalidAPIKey) {
+		t.Fatalf("err = %v, want ErrInvalidAPIKey", err)
+	}
+}
+
+func TestAPIKeyService_Issue_MissingOwner(t *testing.T) {
+	svc := NewAPIKeyService(newFakeAPIKeyRepo())
+	if _, err := svc.Issue(context.Background(), "ci-dashboard", "  "); !errors.Is(err, domain.ErrInvalidAPIKey) {
 		t.Fatalf("err = %v, want ErrInvalidAPIKey", err)
 	}
 }
@@ -71,7 +81,7 @@ func TestAPIKeyService_Issue_InvalidName(t *testing.T) {
 func TestAPIKeyService_Authenticate(t *testing.T) {
 	repo := newFakeAPIKeyRepo()
 	svc := NewAPIKeyService(repo)
-	issued, err := svc.Issue(context.Background(), "ci-dashboard")
+	issued, err := svc.Issue(context.Background(), "ci-dashboard", "acme")
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -83,6 +93,9 @@ func TestAPIKeyService_Authenticate(t *testing.T) {
 		}
 		if key.ID != issued.APIKey.ID {
 			t.Errorf("key id = %q, want %q", key.ID, issued.APIKey.ID)
+		}
+		if key.OwnerID != "acme" {
+			t.Errorf("key owner = %q, want acme", key.OwnerID)
 		}
 	})
 

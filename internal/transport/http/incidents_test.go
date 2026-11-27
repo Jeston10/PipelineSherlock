@@ -26,13 +26,13 @@ type fakeIncidentLister struct {
 	gotDetailLimit    int
 }
 
-func (f *fakeIncidentLister) List(_ context.Context, gitlabProjectID int64, limit int) ([]domain.Incident, error) {
+func (f *fakeIncidentLister) List(_ context.Context, _ string, gitlabProjectID int64, limit int) ([]domain.Incident, error) {
 	f.gotGitlabID = gitlabProjectID
 	f.gotLimit = limit
 	return f.incidents, f.err
 }
 
-func (f *fakeIncidentLister) Detail(_ context.Context, gitlabProjectID int64, fingerprint string, limit int) (domain.IncidentDetail, error) {
+func (f *fakeIncidentLister) Detail(_ context.Context, _ string, gitlabProjectID int64, fingerprint string, limit int) (domain.IncidentDetail, error) {
 	f.gotDetailGitlabID = gitlabProjectID
 	f.gotFingerprint = fingerprint
 	f.gotDetailLimit = limit

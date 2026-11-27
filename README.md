@@ -216,14 +216,21 @@ web/                   # React + TypeScript dashboard (incidents list + detail +
   key (`api_keys`, migration 0006), verified in the transport `authMiddleware`
   (401 + `WWW-Authenticate` otherwise). Health probes and the GitLab webhook (its
   own per-project token) stay public; the surface fails closed. Mint a key with
-  `server issue-key <name>` (plaintext shown once). This is slice 1 of the
-  [production-readiness roadmap](docs/production-readiness-roadmap.md); see
+  `server issue-key <name> <owner>` (plaintext shown once). This is slice 1 of
+  the [production-readiness roadmap](docs/production-readiness-roadmap.md); see
   [docs/architecture.md](docs/architecture.md) §19.
-- **Not yet built:** per-caller authorization scoping (M6 slice 2) and the rest
-  of the [production-readiness roadmap](docs/production-readiness-roadmap.md),
-  dashboard authentication (M14), deep-linkable incident selection (URL state),
-  richer flaky/regression detection using success data and timing, and any
-  benchmark claims. No performance or scale numbers are claimed.
+- **Built (M6 slice 2):** per-caller authorization scoping — every API key and
+  project carries an owner (migration 0007). The authenticated owner flows from
+  the key through request context into the services, which scope project
+  registration, the project list and incident reads to that owner; a cross-owner
+  project reads as 404, so existence never leaks. See
+  [docs/architecture.md](docs/architecture.md) §20.
+- **Not yet built:** the rest of the
+  [production-readiness roadmap](docs/production-readiness-roadmap.md) (M7
+  onward — secrets, transport hardening, observability, …), dashboard
+  authentication (M14), deep-linkable incident selection (URL state), richer
+  flaky/regression detection using success data and timing, and any benchmark
+  claims. No performance or scale numbers are claimed.
 
 ## License
 

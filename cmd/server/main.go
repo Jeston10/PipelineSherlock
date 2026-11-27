@@ -6,7 +6,7 @@
 //	server serve      # same as above
 //	server migrate    # apply pending migrations and exit
 //	server rollback   # revert the most recent migration and exit
-//	server issue-key <name>  # mint an API key, print it once, and exit
+//	server issue-key <name> <owner>  # mint an API key for an owner, print once, exit
 package main
 
 import (
@@ -79,11 +79,14 @@ func run(logger *slog.Logger) error {
 		}
 		return serve(cfg, db, logger)
 	case "issue-key":
-		name := ""
+		name, owner := "", ""
 		if len(os.Args) > 2 {
 			name = os.Args[2]
 		}
-		return issueAPIKey(startupCtx, db, name, logger)
+		if len(os.Args) > 3 {
+			owner = os.Args[3]
+		}
+		return issueAPIKey(startupCtx, db, name, owner, logger)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
@@ -92,21 +95,22 @@ func run(logger *slog.Logger) error {
 // issueAPIKey mints a new API key under the given name, printing the plaintext
 // to stdout exactly once (never logged), then exits. Operators run this to
 // obtain a credential for the authenticated /api/v1 surface.
-func issueAPIKey(ctx context.Context, db *postgres.DB, name string, logger *slog.Logger) error {
-	if strings.TrimSpace(name) == "" {
-		return errors.New("usage: server issue-key <name>")
+func issueAPIKey(ctx context.Context, db *postgres.DB, name, owner string, logger *slog.Logger) error {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(owner) == "" {
+		return errors.New("usage: server issue-key <name> <owner>")
 	}
 	if err := postgres.Migrate(ctx, db); err != nil {
 		return fmt.Errorf("migrate before issue-key: %w", err)
 	}
 	svc := application.NewAPIKeyService(pgrepo.NewAPIKeyRepo(db.Pool))
-	res, err := svc.Issue(ctx, name)
+	res, err := svc.Issue(ctx, name, owner)
 	if err != nil {
 		return fmt.Errorf("issue api key: %w", err)
 	}
-	fmt.Printf("API key issued.\n  id:   %s\n  name: %s\n  key:  %s\n",
-		res.APIKey.ID, res.APIKey.Name, res.PlaintextKey)
-	logger.Info("api key issued", slog.String("id", res.APIKey.ID), slog.String("name", res.APIKey.Name))
+	fmt.Printf("API key issued.\n  id:    %s\n  name:  %s\n  owner: %s\n  key:   %s\n",
+		res.APIKey.ID, res.APIKey.Name, res.APIKey.OwnerID, res.PlaintextKey)
+	logger.Info("api key issued",
+		slog.String("id", res.APIKey.ID), slog.String("name", res.APIKey.Name), slog.String("owner", res.APIKey.OwnerID))
 	return nil
 }
 

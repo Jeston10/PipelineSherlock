@@ -12,8 +12,8 @@ import (
 // Defined here (consumer side) so the transport layer is not bound to a
 // concrete service type.
 type ProjectService interface {
-	Register(ctx context.Context, gitlabProjectID int64, name, namespace string) (application.RegisterProjectResult, error)
-	List(ctx context.Context) ([]domain.Project, error)
+	Register(ctx context.Context, ownerID string, gitlabProjectID int64, name, namespace string) (application.RegisterProjectResult, error)
+	List(ctx context.Context, ownerID string) ([]domain.Project, error)
 }
 
 // WebhookIngestor is the subset of ingestion the HTTP layer needs.
@@ -23,8 +23,8 @@ type WebhookIngestor interface {
 
 // IncidentLister is the subset of incident reads the HTTP layer needs.
 type IncidentLister interface {
-	List(ctx context.Context, gitlabProjectID int64, limit int) ([]domain.Incident, error)
-	Detail(ctx context.Context, gitlabProjectID int64, fingerprint string, limit int) (domain.IncidentDetail, error)
+	List(ctx context.Context, ownerID string, gitlabProjectID int64, limit int) ([]domain.Incident, error)
+	Detail(ctx context.Context, ownerID string, gitlabProjectID int64, fingerprint string, limit int) (domain.IncidentDetail, error)
 }
 
 // defaultMaxWebhookBytes bounds the size of an accepted webhook body.

@@ -32,12 +32,13 @@ func NewIncidentService(projects ProjectRepository, incidents IncidentRepository
 // List resolves the GitLab project id to the registered project and returns its
 // incidents, most recently seen first. It returns ErrProjectNotFound when the
 // project is not registered.
-func (s *IncidentService) List(ctx context.Context, gitlabProjectID int64, limit int) ([]domain.Incident, error) {
+func (s *IncidentService) List(ctx context.Context, ownerID string, gitlabProjectID int64, limit int) ([]domain.Incident, error) {
 	project, found, err := s.projects.GetByGitLabID(ctx, gitlabProjectID)
 	if err != nil {
 		return nil, err
 	}
-	if !found {
+	if !found || project.OwnerID != ownerID {
+		// A cross-owner project is reported as not found so existence never leaks.
 		return nil, ErrProjectNotFound
 	}
 	return s.incidents.ListByProject(ctx, project.ID, clampIncidentLimit(limit))
@@ -48,12 +49,13 @@ func (s *IncidentService) List(ctx context.Context, gitlabProjectID int64, limit
 // occurrence history, a per-ref breakdown and heuristic signals. It returns
 // ErrProjectNotFound when the project is not registered and ErrIncidentNotFound
 // when the project has no such fingerprint.
-func (s *IncidentService) Detail(ctx context.Context, gitlabProjectID int64, fingerprint string, limit int) (domain.IncidentDetail, error) {
+func (s *IncidentService) Detail(ctx context.Context, ownerID string, gitlabProjectID int64, fingerprint string, limit int) (domain.IncidentDetail, error) {
 	project, found, err := s.projects.GetByGitLabID(ctx, gitlabProjectID)
 	if err != nil {
 		return domain.IncidentDetail{}, err
 	}
-	if !found {
+	if !found || project.OwnerID != ownerID {
+		// A cross-owner project is reported as not found so existence never leaks.
 		return domain.IncidentDetail{}, ErrProjectNotFound
 	}
 

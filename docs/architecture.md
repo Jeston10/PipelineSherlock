@@ -836,6 +836,47 @@ authorization scoping is M6 slice 2.)
 
 ---
 
+## 20. Per-caller authorization scoping **[Built: M6 slice 2]**
+
+Slice 1 proved *who* a caller is; slice 2 decides *what* they may see. Every API
+key now belongs to an owner (tenant), and every project is owned by the tenant
+that registered it, so a caller only ever sees and mutates its own projects.
+
+```mermaid
+flowchart TD
+    REQ["authenticated /api/v1 request"] --> MW["authMiddleware (§19)<br/>owner from key → context"]
+    MW --> H["handler<br/>OwnerIDFromContext"]
+    H -->|owner + gitlab id| SVC["IncidentService / project list<br/>scoped by owner"]
+    SVC --> LOOK["GetByGitLabID"]
+    LOOK --> CHK{"project.OwnerID == caller?"}
+    CHK -->|yes| DATA["serve incidents / projects"]
+    CHK -->|no / not found| NF["404 — no existence leak"]
+    REG["register project"] -->|owner from context| OWN["project.OwnerID = caller"]
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class REQ,MW,H,SVC,LOOK,CHK,DATA,NF,REG,OWN built;
+```
+
+**Walkthrough.** The authenticated key carries an `OwnerID` (migration 0007 adds
+`owner_id` to `api_keys` and `projects`; `issue-key <name> <owner>` sets it). The
+auth middleware puts that owner into the request context; handlers read it with
+`OwnerIDFromContext` and pass it *explicitly* into the services, so the
+application layer never reaches into transport context and stays unit-testable.
+
+Registration stamps the new project with the caller's owner. Reads resolve the
+project by GitLab id and then compare `project.OwnerID` to the caller: on a
+mismatch the service returns `ErrProjectNotFound`, exactly as for a project that
+does not exist. That is deliberate — a cross-tenant caller cannot even tell
+whether a project id is registered, so existence never leaks (the roadmap's "404
+to avoid leaking existence"). The project listing is scoped the same way through
+`ListByOwner`. The GitLab webhook is unaffected: it stays public, authenticated
+by its own per-project token, and ingestion assigns no owner.
+
+Legacy rows default to an empty owner, which no issued key can match (keys
+require a non-empty owner), so any pre-existing data is private by default.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

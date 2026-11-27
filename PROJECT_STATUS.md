@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-27 (M6 slice 1)
+Last updated: 2026-11-27 (M6 slice 2)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -284,9 +284,9 @@ Verified locally: `gofmt` clean, `go vet ./...` and `go build ./...` pass,
 - Deep-linkable incident selection (URL state) so a detail view is shareable.
 - Richer flaky/regression detection using success data and timing.
 
-## Milestone 6 — API authentication & authorization 🚧 in progress
+## Milestone 6 — API authentication & authorization ✅ complete
 
-### Slice 1 — API-key authentication ✅ done (this slice)
+### Slice 1 — API-key authentication ✅ done
 
 - Migration `0006_api_keys`: `api_keys` table storing a hash only, with a unique
   `key_hash` (reversible).
@@ -314,6 +314,28 @@ transport/http 84.0% — all ≥80%), and the `-tags=integration` tests compile.
 
 > Note: the M4 dashboard calls `/api/v1` and now receives `401` until it sends a
 > key — dashboard authentication is M14 slice 1.
+
+### Slice 2 — per-caller authorization scoping ✅ done (this slice)
+
+- Migration `0007_ownership`: `owner_id` on `api_keys` and `projects` (projects
+  indexed), reversible.
+- `domain`: `APIKey.OwnerID` (required by `NewAPIKey`) and `Project.OwnerID` +
+  `WithOwner`. Table-driven tests.
+- `application`: the authenticated owner is passed explicitly into
+  `RegisterProjectService.Register`/`.List` and `IncidentService.List`/`.Detail`;
+  a cross-owner project resolves to `ErrProjectNotFound` (no existence leak);
+  `ProjectRepository.List` → `ListByOwner`. Unit-tested, including a cross-owner
+  hidden case.
+- `transport/http`: the auth middleware stores the key's owner in the request
+  context (`OwnerIDFromContext`); handlers scope registration, the project list
+  and incident reads to it.
+- `adapters/postgres`: `owner_id` read and written; `ListByOwner` filters by
+  owner. Integration test extended with an owner round-trip and project scoping.
+- `cmd/server`: `issue-key <name> <owner>` binds a key to an owner.
+
+Verified locally: `gofmt`/`go vet`/`go build` clean, `go test ./...` green
+(domain 94.9%, application 83.1%, transport/http 83.9% — all ≥80%), and
+`-tags=integration` compiles. See [docs/architecture.md](docs/architecture.md) §20.
 
 ## Production readiness (post-M5)
 

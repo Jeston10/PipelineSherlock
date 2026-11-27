@@ -54,7 +54,7 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new project: %v", err)
 	}
-	proj = proj.WithWebhookSecretHash("a-hash")
+	proj = proj.WithWebhookSecretHash("a-hash").WithOwner("acme")
 	stored, err := projects.Create(ctx, proj)
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -236,7 +236,7 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 	if _, err := db.Pool.Exec(ctx, "TRUNCATE api_keys"); err != nil {
 		t.Fatalf("truncate api_keys: %v", err)
 	}
-	keyRec, err := domain.NewAPIKey("ci-dashboard", "hash-abc")
+	keyRec, err := domain.NewAPIKey("ci-dashboard", "acme", "hash-abc")
 	if err != nil {
 		t.Fatalf("new api key: %v", err)
 	}
@@ -251,11 +251,24 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("find api key = (ok %v, err %v), want (true, nil)", ok, err)
 	}
-	if foundKey.Name != "ci-dashboard" {
-		t.Errorf("found key name = %q, want ci-dashboard", foundKey.Name)
+	if foundKey.Name != "ci-dashboard" || foundKey.OwnerID != "acme" {
+		t.Errorf("found key = (name %q, owner %q), want ci-dashboard/acme", foundKey.Name, foundKey.OwnerID)
 	}
 	if _, ok, err := apiKeys.FindByHash(ctx, "no-such-hash"); err != nil || ok {
 		t.Errorf("FindByHash(unknown) = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+
+	// Project ownership scoping: the project is owned by "acme" and invisible to
+	// any other owner.
+	owned, err := projects.ListByOwner(ctx, "acme")
+	if err != nil {
+		t.Fatalf("list by owner: %v", err)
+	}
+	if len(owned) != 1 || owned[0].OwnerID != "acme" {
+		t.Errorf("ListByOwner(acme) = %+v, want exactly one acme-owned project", owned)
+	}
+	if other, err := projects.ListByOwner(ctx, "someone-else"); err != nil || len(other) != 0 {
+		t.Errorf("ListByOwner(someone-else) = (%d projects, err %v), want (0, nil)", len(other), err)
 	}
 
 	// Mark processed; the inbox should then be empty.

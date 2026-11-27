@@ -38,7 +38,8 @@ func authMiddleware(authenticator APIKeyAuthenticator) func(http.Handler) http.H
 				return
 			}
 
-			if _, err := authenticator.Authenticate(r.Context(), key); err != nil {
+			authed, err := authenticator.Authenticate(r.Context(), key)
+			if err != nil {
 				if errors.Is(err, application.ErrUnauthenticated) {
 					writeUnauthorized(w)
 					return
@@ -46,7 +47,7 @@ func authMiddleware(authenticator APIKeyAuthenticator) func(http.Handler) http.H
 				writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 				return
 			}
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(contextWithOwnerID(r.Context(), authed.OwnerID)))
 		})
 	}
 }

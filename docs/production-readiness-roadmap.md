@@ -77,7 +77,7 @@ flowchart LR
     classDef planned fill:#8b949e22,stroke:#8b949e,stroke-width:1px,stroke-dasharray:4 3;
 ```
 
-### M6 · Slice 2 — Authorization scoping **[Planned]**
+### M6 · Slice 2 — Authorization scoping **[Built — see architecture.md §20]**
 
 **Goal.** A caller only sees and mutates projects it owns.
 **Changes.** Associate each API key with an owner/org; add an `owner_id` to

@@ -45,12 +45,12 @@ type IssueAPIKeyResult struct {
 
 // Issue generates a new high-entropy key, stores only its SHA-256 hash under the
 // given name, and returns the plaintext once for the operator to record.
-func (s *APIKeyService) Issue(ctx context.Context, name string) (IssueAPIKeyResult, error) {
+func (s *APIKeyService) Issue(ctx context.Context, name, ownerID string) (IssueAPIKeyResult, error) {
 	plaintext, err := token.Generate()
 	if err != nil {
 		return IssueAPIKeyResult{}, fmt.Errorf("generate api key: %w", err)
 	}
-	key, err := domain.NewAPIKey(name, token.Hash(plaintext))
+	key, err := domain.NewAPIKey(name, ownerID, token.Hash(plaintext))
 	if err != nil {
 		return IssueAPIKeyResult{}, err
 	}
