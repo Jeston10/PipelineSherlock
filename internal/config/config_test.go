@@ -205,15 +205,16 @@ func TestLoad_UnknownSecretProvider(t *testing.T) {
 // leaking database/redis credentials into logs.
 func TestRedacted_NeverLeaksCredentials(t *testing.T) {
 	cfg, err := Load(envMap(map[string]string{
-		"DATABASE_URL": "postgres://admin:supersecret@db.internal:5432/ps",
-		"REDIS_URL":    "redis://:topsecret@cache.internal:6379/0",
-		"GITLAB_TOKEN": "glpat-tokensecret",
+		"DATABASE_URL":   "postgres://admin:supersecret@db.internal:5432/ps",
+		"REDIS_URL":      "redis://:topsecret@cache.internal:6379/0",
+		"GITLAB_TOKEN":   "glpat-tokensecret",
+		"ENCRYPTION_KEY": "bWFzdGVya2V5c2VjcmV0dmFsdWVub3Rsb2dnZWQ=",
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := cfg.Redacted()
-	for _, leak := range []string{"supersecret", "topsecret", "admin", "glpat-tokensecret"} {
+	for _, leak := range []string{"supersecret", "topsecret", "admin", "glpat-tokensecret", "bWFzdGVya2V5c2VjcmV0dmFsdWVub3Rsb2dnZWQ="} {
 		if strings.Contains(out, leak) {
 			t.Errorf("Redacted() leaked %q: %s", leak, out)
 		}

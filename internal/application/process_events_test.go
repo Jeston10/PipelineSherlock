@@ -163,6 +163,35 @@ func TestProcessNext_ReconcilesViaGitLab(t *testing.T) {
 	}
 }
 
+func TestProcessNext_PayloadFallbackWhenNoToken(t *testing.T) {
+	ctx := context.Background()
+	events := newFakeEventRepo()
+	pipelines := &fakePipelineRepo{}
+	fingerprints := &fakeFingerprintRepo{}
+	mustInsert(t, events, "Pipeline Hook", pipelinePayloadJSON)
+
+	// The client reports no token for this project: reconcile must fall back to
+	// the webhook payload and skip fingerprinting, not fail the event.
+	gitlab := fakeGitLabClient{err: ErrNoGitLabToken}
+	svc := NewProcessEventsService(events, pipelines, fingerprints, gitlab, nil)
+
+	if _, err := svc.ProcessNext(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pipelines.upserts) != 1 {
+		t.Fatalf("upserts = %d, want 1 (payload fallback)", len(pipelines.upserts))
+	}
+	if got := pipelines.upserts[0].pipeline.Status; got != "failed" {
+		t.Errorf("status = %q, want failed (from the payload)", got)
+	}
+	if fingerprints.count() != 0 {
+		t.Errorf("occurrences = %d, want 0 (no token, so no trace)", fingerprints.count())
+	}
+	if events.events[0].Status != domain.WebhookStatusProcessed {
+		t.Errorf("event status = %q, want processed", events.events[0].Status)
+	}
+}
+
 func TestProcessNext_FingerprintsFailedJob(t *testing.T) {
 	ctx := context.Background()
 	events := newFakeEventRepo()

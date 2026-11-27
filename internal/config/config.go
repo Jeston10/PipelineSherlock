@@ -42,6 +42,10 @@ type Config struct {
 	// request a failing pipeline belongs to. It takes effect only alongside a
 	// configured GitLab token (see WriteBackActive).
 	WriteBackEnabled bool
+	// EncryptionKey is the base64-encoded 32-byte master key used to encrypt
+	// per-project secrets at rest (e.g. per-project GitLab tokens). Empty disables
+	// per-project credential storage. It is resolved through the secret provider.
+	EncryptionKey string
 }
 
 // Default values applied when an optional variable is unset.
@@ -83,6 +87,10 @@ func Load(getenv Getenv) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve GITLAB_TOKEN: %w", err)
 	}
+	encryptionKey, err := secrets.Get(ctx, "ENCRYPTION_KEY")
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve ENCRYPTION_KEY: %w", err)
+	}
 
 	cfg := Config{
 		Env:              firstNonEmpty(getenv("APP_ENV"), "development"),
@@ -95,6 +103,7 @@ func Load(getenv Getenv) (Config, error) {
 		GitLabBaseURL:    firstNonEmpty(getenv("GITLAB_BASE_URL"), defaultGitLabBaseURL),
 		GitLabToken:      strings.TrimSpace(gitlabToken),
 		WriteBackEnabled: boolEnv(getenv, "GITLAB_WRITEBACK_ENABLED"),
+		EncryptionKey:    strings.TrimSpace(encryptionKey),
 	}
 
 	if d, err := durationEnv(getenv, "SHUTDOWN_TIMEOUT"); err != nil {
@@ -147,9 +156,9 @@ func (c Config) validate() error {
 // credentials. It is intended for startup logging.
 func (c Config) Redacted() string {
 	return fmt.Sprintf(
-		"env=%s http_addr=%s database=%s redis=%s gitlab=%s gitlab_token=%s writeback=%t shutdown_timeout=%s",
+		"env=%s http_addr=%s database=%s redis=%s gitlab=%s gitlab_token=%s writeback=%t encryption_key=%s shutdown_timeout=%s",
 		c.Env, c.HTTPAddr, redactURL(c.DatabaseURL), redactURL(c.RedisURL),
-		c.GitLabBaseURL, redactSecret(c.GitLabToken), c.WriteBackActive(), c.ShutdownTimeout,
+		c.GitLabBaseURL, redactSecret(c.GitLabToken), c.WriteBackActive(), redactSecret(c.EncryptionKey), c.ShutdownTimeout,
 	)
 }
 

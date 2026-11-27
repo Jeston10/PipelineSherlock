@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -97,19 +98,26 @@ func (s *ProcessEventsService) reconcile(ctx context.Context, ev domain.WebhookE
 		return nil
 	}
 
-	// Prefer authoritative GitLab state when a client is configured; the webhook
-	// payload can be stale by the time we process it.
-	if s.gitlab != nil {
+	// Prefer authoritative GitLab state when a client is configured and a token
+	// is available for this project; the webhook payload can be stale by the time
+	// we process it. A project with no resolvable token (no per-project credential
+	// and no global token) falls back to the payload rather than failing the event.
+	useGitLab := s.gitlab != nil
+	if useGitLab {
 		fetched, ferr := s.gitlab.GetPipeline(ctx, gitlabProjectID, glp.ID)
-		if ferr != nil {
+		switch {
+		case errors.Is(ferr, ErrNoGitLabToken):
+			useGitLab = false // no token for this project; reconcile from the payload
+		case ferr != nil:
 			return fmt.Errorf("fetch pipeline %d: %w", glp.ID, ferr)
+		default:
+			glp = fetched
+			jobs, jerr := s.gitlab.ListPipelineJobs(ctx, gitlabProjectID, glp.ID)
+			if jerr != nil {
+				return fmt.Errorf("list jobs for pipeline %d: %w", glp.ID, jerr)
+			}
+			gljobs = jobs
 		}
-		glp = fetched
-		jobs, jerr := s.gitlab.ListPipelineJobs(ctx, gitlabProjectID, glp.ID)
-		if jerr != nil {
-			return fmt.Errorf("list jobs for pipeline %d: %w", glp.ID, jerr)
-		}
-		gljobs = jobs
 	}
 
 	pipeline, err := domain.NewPipeline(ev.ProjectID, glp.ID, glp.Ref, glp.SHA, glp.Status)
@@ -141,8 +149,8 @@ func (s *ProcessEventsService) reconcile(ctx context.Context, ev domain.WebhookE
 	}
 
 	// Fingerprint failed jobs. This needs job traces, which are only available
-	// through the GitLab API, so it runs only when a client is configured.
-	if s.gitlab != nil && s.fingerprints != nil {
+	// through the GitLab API, so it runs only when GitLab was used for this event.
+	if useGitLab && s.fingerprints != nil {
 		s.fingerprintFailedJobs(ctx, ev.ProjectID, gitlabProjectID, mergeRequestIID, gljobs, jobIDs)
 	}
 	return nil

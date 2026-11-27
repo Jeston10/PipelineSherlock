@@ -136,6 +136,7 @@ internal/
   adapters/postgres/   # repository implementations (projects, inbox, pipelines)
   platform/postgres/   # pgx pool + embedded migrator
   platform/secret/     # secret provider port (env / file-backed)
+  platform/crypto/     # envelope encryption for secrets at rest
   transport/http/      # router, middleware, health/readiness, API handlers (incidents)
 migrations/            # embedded, reversible SQL migrations
 tests/fixtures/        # deterministic demo/seed data
@@ -233,10 +234,18 @@ web/                   # React + TypeScript dashboard (incidents list + detail +
   which reads each secret from `<SECRETS_DIR>/<NAME>` (the Docker/Kubernetes
   mounted-secret convention) so values stay out of the environment; `config.Load`
   keeps its signature. See [docs/architecture.md](docs/architecture.md) §21.
+- **Built (M7 slice 2):** per-project GitLab credentials — each project can carry
+  its own GitLab token, encrypted at rest with envelope encryption
+  (`internal/platform/crypto`: a per-token AES-256-GCM data key wrapped by the
+  `ENCRYPTION_KEY` master key); only ciphertext is stored (`project_credentials`,
+  migration 0008). The worker resolves the token per project (stored token first,
+  then the global `GITLAB_TOKEN`), and a project with neither reconciles from the
+  webhook payload. Store one with `PROJECT_GITLAB_TOKEN=… server set-project-token
+  <owner> <gitlab_project_id>`. See [docs/architecture.md](docs/architecture.md) §22.
 - **Not yet built:** the rest of the
-  [production-readiness roadmap](docs/production-readiness-roadmap.md) (M7
-  slice 2 onward — per-project GitLab tokens, transport hardening,
-  observability, …), dashboard
+  [production-readiness roadmap](docs/production-readiness-roadmap.md) (M8
+  onward — transport hardening, safe deploys & config, observability, …),
+  dashboard
   authentication (M14), deep-linkable incident selection (URL state), richer
   flaky/regression detection using success data and timing, and any benchmark
   claims. No performance or scale numbers are claimed.

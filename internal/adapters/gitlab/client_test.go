@@ -2,12 +2,22 @@ package gitlab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Jeston10/pipeline-sherlock/internal/application"
 )
+
+// resolverFunc adapts a function to the TokenResolver interface for tests.
+type resolverFunc func(context.Context, int64) (string, error)
+
+func (f resolverFunc) TokenForGitLabProject(ctx context.Context, id int64) (string, error) {
+	return f(ctx, id)
+}
 
 func testClient(server *httptest.Server) *Client {
 	// Tiny base delay keeps retry tests fast.
@@ -144,6 +154,49 @@ func TestGetJobTrace_RetriesOn5xx(t *testing.T) {
 	}
 	if got != "ok trace" {
 		t.Errorf("trace = %q, want %q", got, "ok trace")
+	}
+}
+
+func TestMultiTenant_UsesResolvedToken(t *testing.T) {
+	var gotToken string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotToken = r.Header.Get("PRIVATE-TOKEN")
+		fmt.Fprint(w, `{"id":55,"status":"failed"}`)
+	}))
+	defer server.Close()
+
+	resolver := resolverFunc(func(_ context.Context, gitlabProjectID int64) (string, error) {
+		if gitlabProjectID == 1001 {
+			return "project-1001-token", nil
+		}
+		return "", nil
+	})
+	client := NewMultiTenant(server.URL, resolver, WithHTTPClient(server.Client()), WithRetry(1, time.Millisecond))
+
+	if _, err := client.GetPipeline(context.Background(), 1001, 55); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotToken != "project-1001-token" {
+		t.Errorf("PRIVATE-TOKEN = %q, want the resolved per-project token", gotToken)
+	}
+}
+
+func TestMultiTenant_NoTokenReturnsErrNoGitLabToken(t *testing.T) {
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer server.Close()
+
+	resolver := resolverFunc(func(context.Context, int64) (string, error) { return "", nil })
+	client := NewMultiTenant(server.URL, resolver, WithHTTPClient(server.Client()))
+
+	_, err := client.GetPipeline(context.Background(), 2002, 5)
+	if !errors.Is(err, application.ErrNoGitLabToken) {
+		t.Fatalf("err = %v, want application.ErrNoGitLabToken", err)
+	}
+	if called {
+		t.Error("no HTTP request should be made when no token is available")
 	}
 }
 

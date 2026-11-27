@@ -7,6 +7,7 @@
 //	server migrate    # apply pending migrations and exit
 //	server rollback   # revert the most recent migration and exit
 //	server issue-key <name> <owner>  # mint an API key for an owner, print once, exit
+//	server set-project-token <owner> <gitlab_project_id>  # store a project's GitLab token (read from PROJECT_GITLAB_TOKEN), exit
 package main
 
 import (
@@ -17,6 +18,7 @@ import (
 	nethttp "net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +27,7 @@ import (
 	pgrepo "github.com/Jeston10/pipeline-sherlock/internal/adapters/postgres"
 	"github.com/Jeston10/pipeline-sherlock/internal/application"
 	"github.com/Jeston10/pipeline-sherlock/internal/config"
+	"github.com/Jeston10/pipeline-sherlock/internal/platform/crypto"
 	"github.com/Jeston10/pipeline-sherlock/internal/platform/postgres"
 	transporthttp "github.com/Jeston10/pipeline-sherlock/internal/transport/http"
 )
@@ -87,6 +90,15 @@ func run(logger *slog.Logger) error {
 			owner = os.Args[3]
 		}
 		return issueAPIKey(startupCtx, db, name, owner, logger)
+	case "set-project-token":
+		owner, pid := "", ""
+		if len(os.Args) > 2 {
+			owner = os.Args[2]
+		}
+		if len(os.Args) > 3 {
+			pid = os.Args[3]
+		}
+		return setProjectToken(startupCtx, cfg, db, owner, pid, logger)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
@@ -114,6 +126,47 @@ func issueAPIKey(ctx context.Context, db *postgres.DB, name, owner string, logge
 	return nil
 }
 
+// setProjectToken stores an encrypted per-project GitLab token. The token is
+// read from the PROJECT_GITLAB_TOKEN environment variable (never passed on the
+// command line, so it stays out of shell history), sealed with the master key,
+// and persisted. It requires ENCRYPTION_KEY to be configured and the project to
+// belong to the given owner.
+func setProjectToken(ctx context.Context, cfg config.Config, db *postgres.DB, owner, gitlabProjectID string, logger *slog.Logger) error {
+	if strings.TrimSpace(owner) == "" || strings.TrimSpace(gitlabProjectID) == "" {
+		return errors.New("usage: server set-project-token <owner> <gitlab_project_id> (token read from PROJECT_GITLAB_TOKEN)")
+	}
+	pid, err := strconv.ParseInt(strings.TrimSpace(gitlabProjectID), 10, 64)
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("invalid gitlab project id %q", gitlabProjectID)
+	}
+	token := strings.TrimSpace(os.Getenv("PROJECT_GITLAB_TOKEN"))
+	if token == "" {
+		return errors.New("PROJECT_GITLAB_TOKEN must be set to the project's GitLab token")
+	}
+	if strings.TrimSpace(cfg.EncryptionKey) == "" {
+		return errors.New("ENCRYPTION_KEY must be configured to store an encrypted project token")
+	}
+	sealer, err := crypto.NewSealerFromBase64(cfg.EncryptionKey)
+	if err != nil {
+		return fmt.Errorf("configure encryption: %w", err)
+	}
+	if err := postgres.Migrate(ctx, db); err != nil {
+		return fmt.Errorf("migrate before set-project-token: %w", err)
+	}
+	svc := application.NewSetProjectTokenService(
+		pgrepo.NewProjectRepo(db.Pool),
+		pgrepo.NewProjectCredentialRepo(db.Pool),
+		sealer,
+	)
+	if err := svc.Set(ctx, owner, pid, token); err != nil {
+		return fmt.Errorf("set project token: %w", err)
+	}
+	fmt.Printf("Stored encrypted GitLab token for project %d (owner %s).\n", pid, owner)
+	logger.Info("project gitlab token stored",
+		slog.Int64("gitlab_project_id", pid), slog.String("owner", owner))
+	return nil
+}
+
 func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	// Repositories (adapters) and use cases (application), wired here.
 	projectRepo := pgrepo.NewProjectRepo(db.Pool)
@@ -126,23 +179,42 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	incidentSvc := application.NewIncidentService(projectRepo, incidentRepo)
 	apiKeySvc := application.NewAPIKeyService(pgrepo.NewAPIKeyRepo(db.Pool))
 
-	// The background worker reconciles inbox events against GitLab when a token
-	// is configured; otherwise it falls back to the webhook payload.
+	// Per-project GitLab tokens are stored encrypted; the sealer unwraps them at
+	// resolve time. It is optional: without an encryption key only the global
+	// token (if any) is used.
+	var sealer application.TokenSealer
+	if cfg.EncryptionKey != "" {
+		s, err := crypto.NewSealerFromBase64(cfg.EncryptionKey)
+		if err != nil {
+			return fmt.Errorf("configure encryption: %w", err)
+		}
+		sealer = s
+		logger.Info("per-project credential encryption enabled")
+	}
+
+	// The background worker reconciles inbox events against GitLab using each
+	// project's own token when one is stored, falling back to the global token.
+	// A project with neither is reconciled from the webhook payload instead.
 	var gitlabClient application.GitLabClient
 	var procOpts []application.ProcessOption
-	if cfg.GitLabConfigured() {
-		client := gitlabadapter.New(cfg.GitLabBaseURL, cfg.GitLabToken)
+	if cfg.GitLabConfigured() || sealer != nil {
+		resolver := application.NewProjectTokenResolver(projectRepo, pgrepo.NewProjectCredentialRepo(db.Pool), sealer, cfg.GitLabToken)
+		client := gitlabadapter.NewMultiTenant(cfg.GitLabBaseURL, resolver)
 		gitlabClient = client
-		logger.Info("gitlab reconciliation enabled", slog.String("base_url", cfg.GitLabBaseURL))
+		logger.Info("gitlab reconciliation enabled",
+			slog.String("base_url", cfg.GitLabBaseURL),
+			slog.Bool("global_token", cfg.GitLabConfigured()),
+			slog.Bool("per_project_tokens", sealer != nil),
+		)
 
-		// Merge-request write-back is opt-in and needs the GitLab API to post.
+		// Merge-request write-back is opt-in and needs a global GitLab token to post.
 		if cfg.WriteBackActive() {
 			writeBack := application.NewWriteBackService(pgrepo.NewCommentRepo(db.Pool), client, logger)
 			procOpts = append(procOpts, application.WithWriteBack(writeBack))
 			logger.Info("gitlab merge-request write-back enabled")
 		}
 	} else {
-		logger.Info("gitlab reconciliation disabled (no GITLAB_TOKEN); using webhook payloads only")
+		logger.Info("gitlab reconciliation disabled (no GITLAB_TOKEN or ENCRYPTION_KEY); using webhook payloads only")
 	}
 	processor := application.NewProcessEventsService(eventRepo, pipelineRepo, fingerprintRepo, gitlabClient, logger, procOpts...)
 	worker := application.NewWorker(processor, logger)

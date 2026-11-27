@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-27 (M7 slice 1)
+Last updated: 2026-11-27 (M7 slice 2)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -355,6 +355,34 @@ Verified locally: `gofmt`/`go vet`/`go build` clean, `go test ./...` green
 Verified locally: `gofmt`/`go vet`/`go build` clean, `go test ./...` green
 (secret 86.4%, config 81.8% — all ≥80%), and `-tags=integration` compiles. See
 [docs/architecture.md](docs/architecture.md) §21.
+
+### Slice 2 — per-project GitLab credentials ✅ done (this slice)
+
+- `internal/platform/crypto`: envelope-encryption `Sealer` (`Seal`/`Open`) — a
+  per-value AES-256-GCM data key wrapped by the master key; authenticated, so
+  tampering fails closed. Unit-tested (round-trip, wrong key, tamper, bad key).
+- Migration `0008_project_credentials`: `project_credentials` stores one
+  `token_ciphertext` (bytea) per project, FK to `projects` with `ON DELETE
+  CASCADE`; reversible.
+- `application`: `ProjectCredentialRepository` + `TokenSealer` ports;
+  `SetProjectTokenService` (owner-scoped, seals then stores) and
+  `ProjectTokenResolver` (stored token first, else the global token, else empty).
+  Unit-tested, including cross-owner hidden and per-project-beats-global.
+- `adapters/gitlab`: the client resolves the token per project via a
+  `TokenResolver` (`NewMultiTenant`); `New` stays back-compatible with a static
+  token. An empty resolved token yields `application.ErrNoGitLabToken` with no
+  request; the processor then reconciles from the payload. Unit-tested.
+- `adapters/postgres.ProjectCredentialRepo` — `Upsert`/`Get` ciphertext;
+  integration test stores, confirms on-disk bytes are not plaintext, resolves
+  per-project vs global, and proves upsert replaces.
+- `config`: `EncryptionKey` resolved through the secret provider and redacted.
+- `cmd/server`: `set-project-token <owner> <gitlab_project_id>` (token from
+  `PROJECT_GITLAB_TOKEN`, never argv); the worker wires the multi-tenant client
+  when a global token or encryption key is present.
+
+Verified locally: `gofmt`/`go vet`/`go build` clean, `go test ./...` green
+(crypto 86.2%, application 82.7%, config 81.2%, gitlab 84.1% — all ≥80%), and
+`-tags=integration` compiles. See [docs/architecture.md](docs/architecture.md) §22.
 
 ## Production readiness (post-M5)
 

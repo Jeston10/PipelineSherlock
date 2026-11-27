@@ -924,6 +924,65 @@ the same port — nothing above `Provider` changes when it lands.
 
 ---
 
+## 22. Per-project GitLab credentials **[Built: M7 slice 2]**
+
+One shared GitLab token across all projects is a multi-tenant blocker. Slice 2
+lets each project carry its own GitLab token, encrypted at rest, and resolves the
+right token per project when the worker reconciles or writes back.
+
+```mermaid
+flowchart TD
+    OP["operator:<br/>set-project-token &lt;owner&gt; &lt;id&gt;<br/>PROJECT_GITLAB_TOKEN"] --> SET["SetProjectTokenService<br/>(owner must match)"]
+    SET -->|Seal: DEK wrapped by KEK| STORE[("project_credentials<br/>token_ciphertext (bytea)")]
+
+    EV["inbox event (project)"] --> CLIENT["gitlab client<br/>(multi-tenant)"]
+    CLIENT --> RES["ProjectTokenResolver<br/>TokenForGitLabProject(id)"]
+    RES --> HAS{"stored credential?"}
+    HAS -->|yes| OPEN["Open: unwrap + decrypt"]
+    OPEN --> STORE
+    HAS -->|no| GLOBAL{"global token set?"}
+    GLOBAL -->|yes| USEGLOBAL["use GITLAB_TOKEN"]
+    GLOBAL -->|no| NONE["ErrNoGitLabToken<br/>→ reconcile from payload"]
+    OPEN --> API["GitLab API (per-project token)"]
+    USEGLOBAL --> API
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class OP,SET,STORE,EV,CLIENT,RES,HAS,OPEN,GLOBAL,USEGLOBAL,API built;
+    classDef warn fill:#d2992222,stroke:#d29922,stroke-width:1px;
+    class NONE warn;
+```
+
+**Walkthrough.** An operator stores a project's token with
+`server set-project-token <owner> <gitlab_project_id>`, supplying the token
+through the `PROJECT_GITLAB_TOKEN` environment variable so it never lands in
+argv or shell history. `SetProjectTokenService` checks that the caller's owner
+matches the project (a cross-owner project reads as not found, §20) and seals the
+token before storing it. Sealing is **envelope encryption** (`internal/platform/crypto`):
+a fresh random data key (DEK) encrypts the token with AES-256-GCM, and the master
+key (KEK, the base64 `ENCRYPTION_KEY` resolved through the secret provider §21)
+wraps the DEK. Only the wrapped blob is written to `project_credentials`
+(migration 0008); the plaintext token never touches the database, and GCM
+authentication means tampered ciphertext fails to open rather than decrypting to
+garbage.
+
+At reconcile time the worker holds one multi-tenant GitLab client. For each call
+it asks the `ProjectTokenResolver` for the token keyed on the GitLab project id:
+a stored credential is unwrapped and decrypted and takes precedence; otherwise the
+global `GITLAB_TOKEN` is used as a fallback. When neither exists the resolver
+returns an empty token, which the adapter surfaces as `application.ErrNoGitLabToken`
+**without making a request** — the processor then reconciles from the webhook
+payload (and skips fingerprinting, which needs a trace), exactly as when GitLab is
+unconfigured. Token resolution lives entirely in the adapter and a small
+application resolver, so the processor and write-back use cases keep their
+single-client shape; only an `ErrNoGitLabToken` fallback was added to `reconcile`.
+
+Reconciliation is now enabled whenever a global token **or** an encryption key is
+configured, so a deployment can run purely on per-project tokens with no shared
+PAT. Merge-request write-back still requires a global token (its opt-in gate);
+per-project write-back without a global token is a later refinement.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

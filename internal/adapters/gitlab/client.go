@@ -29,10 +29,27 @@ const (
 	tokenHeader       = "PRIVATE-TOKEN"
 )
 
-// Client talks to a GitLab instance.
+// TokenResolver returns the GitLab access token to use for a project, keyed on
+// its GitLab project id. An empty token (with a nil error) means no token is
+// available for that project.
+type TokenResolver interface {
+	TokenForGitLabProject(ctx context.Context, gitlabProjectID int64) (string, error)
+}
+
+// staticToken is a TokenResolver that returns the same token for every project.
+// It backs the single-token constructor used in tests and single-tenant setups.
+type staticToken string
+
+func (s staticToken) TokenForGitLabProject(context.Context, int64) (string, error) {
+	return string(s), nil
+}
+
+// Client talks to a GitLab instance. Access tokens are resolved per project
+// through a TokenResolver, so different projects can authenticate with
+// different credentials.
 type Client struct {
 	baseURL    string
-	token      string
+	tokens     TokenResolver
 	httpClient *http.Client
 	maxRetries int
 	baseDelay  time.Duration
@@ -57,9 +74,17 @@ func WithRetry(maxRetries int, baseDelay time.Duration) Option {
 // New constructs a Client for the given base URL (e.g. https://gitlab.com) and
 // access token.
 func New(baseURL, token string, opts ...Option) *Client {
+	return NewMultiTenant(baseURL, staticToken(token), opts...)
+}
+
+// NewMultiTenant constructs a Client that resolves a per-project token through
+// the given resolver (e.g. a stored per-project credential with a global
+// fallback). A method call for a project whose resolved token is empty returns
+// application.ErrNoGitLabToken without making a request.
+func NewMultiTenant(baseURL string, tokens TokenResolver, opts ...Option) *Client {
 	c := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
-		token:      token,
+		tokens:     tokens,
 		httpClient: &http.Client{Timeout: defaultTimeout},
 		maxRetries: defaultMaxRetries,
 		baseDelay:  defaultBaseDelay,
@@ -68,6 +93,20 @@ func New(baseURL, token string, opts ...Option) *Client {
 		opt(c)
 	}
 	return c
+}
+
+// tokenFor resolves the token for a project, mapping an empty token to
+// application.ErrNoGitLabToken so callers fall back rather than send an
+// unauthenticated request.
+func (c *Client) tokenFor(ctx context.Context, gitlabProjectID int64) (string, error) {
+	token, err := c.tokens.TokenForGitLabProject(ctx, gitlabProjectID)
+	if err != nil {
+		return "", err
+	}
+	if token == "" {
+		return "", application.ErrNoGitLabToken
+	}
+	return token, nil
 }
 
 var (
@@ -99,10 +138,14 @@ type apiJob struct {
 
 // GetPipeline fetches a single pipeline.
 func (c *Client) GetPipeline(ctx context.Context, gitlabProjectID, pipelineID int64) (application.GitLabPipeline, error) {
+	token, err := c.tokenFor(ctx, gitlabProjectID)
+	if err != nil {
+		return application.GitLabPipeline{}, err
+	}
 	path := fmt.Sprintf("/api/v4/projects/%d/pipelines/%d", gitlabProjectID, pipelineID)
 
 	var raw apiPipeline
-	if _, err := c.getJSON(ctx, path, nil, &raw); err != nil {
+	if _, err := c.getJSON(ctx, token, path, nil, &raw); err != nil {
 		return application.GitLabPipeline{}, err
 	}
 	return application.GitLabPipeline{
@@ -118,6 +161,10 @@ func (c *Client) GetPipeline(ctx context.Context, gitlabProjectID, pipelineID in
 
 // ListPipelineJobs fetches all jobs for a pipeline, following pagination.
 func (c *Client) ListPipelineJobs(ctx context.Context, gitlabProjectID, pipelineID int64) ([]application.GitLabJob, error) {
+	token, err := c.tokenFor(ctx, gitlabProjectID)
+	if err != nil {
+		return nil, err
+	}
 	path := fmt.Sprintf("/api/v4/projects/%d/pipelines/%d/jobs", gitlabProjectID, pipelineID)
 
 	var out []application.GitLabJob
@@ -128,7 +175,7 @@ func (c *Client) ListPipelineJobs(ctx context.Context, gitlabProjectID, pipeline
 		q.Set("page", strconv.Itoa(page))
 
 		var raw []apiJob
-		headers, err := c.getJSON(ctx, path, q, &raw)
+		headers, err := c.getJSON(ctx, token, path, q, &raw)
 		if err != nil {
 			return nil, err
 		}
@@ -159,8 +206,8 @@ func (c *Client) ListPipelineJobs(ctx context.Context, gitlabProjectID, pipeline
 
 // getJSON performs a GET with retries and decodes a 2xx body into out. It
 // returns the response headers so callers can read pagination markers.
-func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out any) (http.Header, error) {
-	body, headers, err := c.doGet(ctx, path, query, "application/json")
+func (c *Client) getJSON(ctx context.Context, token, path string, query url.Values, out any) (http.Header, error) {
+	body, headers, err := c.doGet(ctx, token, path, query, "application/json")
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +219,7 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out
 
 // doGet performs a GET with the shared retry/backoff policy and returns the raw
 // 2xx body and headers. accept sets the Accept header (JSON or text/plain).
-func (c *Client) doGet(ctx context.Context, path string, query url.Values, accept string) ([]byte, http.Header, error) {
+func (c *Client) doGet(ctx context.Context, token, path string, query url.Values, accept string) ([]byte, http.Header, error) {
 	full := c.baseURL + path
 	if len(query) > 0 {
 		full += "?" + query.Encode()
@@ -190,7 +237,7 @@ func (c *Client) doGet(ctx context.Context, path string, query url.Values, accep
 		if err != nil {
 			return nil, nil, fmt.Errorf("build request: %w", err)
 		}
-		req.Header.Set(tokenHeader, c.token)
+		req.Header.Set(tokenHeader, token)
 		req.Header.Set("Accept", accept)
 
 		resp, err := c.httpClient.Do(req)
@@ -227,11 +274,15 @@ type noteResponse struct {
 // created note's id. It satisfies application.MergeRequestCommenter.
 func (c *Client) PostMergeRequestNote(ctx context.Context, gitlabProjectID, mergeRequestIID int64, body string) (int64, error) {
 	path := fmt.Sprintf("/api/v4/projects/%d/merge_requests/%d/notes", gitlabProjectID, mergeRequestIID)
+	token, err := c.tokenFor(ctx, gitlabProjectID)
+	if err != nil {
+		return 0, err
+	}
 	reqBody, err := json.Marshal(map[string]string{"body": body})
 	if err != nil {
 		return 0, fmt.Errorf("encode note: %w", err)
 	}
-	respBody, err := c.doPost(ctx, path, reqBody)
+	respBody, err := c.doPost(ctx, token, path, reqBody)
 	if err != nil {
 		return 0, err
 	}
@@ -249,7 +300,7 @@ func (c *Client) PostMergeRequestNote(ctx context.Context, gitlabProjectID, merg
 // itself idempotent on GitLab's side, but the write-back use case only posts
 // when its own (fingerprint, MR) record was newly created, so a lost-response
 // retry is the only window for a duplicate — an acceptable trade for resilience.
-func (c *Client) doPost(ctx context.Context, path string, reqBody []byte) ([]byte, error) {
+func (c *Client) doPost(ctx context.Context, token, path string, reqBody []byte) ([]byte, error) {
 	full := c.baseURL + path
 
 	var lastErr error
@@ -264,7 +315,7 @@ func (c *Client) doPost(ctx context.Context, path string, reqBody []byte) ([]byt
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
-		req.Header.Set(tokenHeader, c.token)
+		req.Header.Set(tokenHeader, token)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
 
@@ -296,8 +347,12 @@ func (c *Client) doPost(ctx context.Context, path string, reqBody []byte) ([]byt
 // GetJobTrace fetches the raw log (trace) for a job. GitLab returns plain text,
 // not JSON. An empty trace is valid (a job may have produced no output).
 func (c *Client) GetJobTrace(ctx context.Context, gitlabProjectID, jobID int64) (string, error) {
+	token, err := c.tokenFor(ctx, gitlabProjectID)
+	if err != nil {
+		return "", err
+	}
 	path := fmt.Sprintf("/api/v4/projects/%d/jobs/%d/trace", gitlabProjectID, jobID)
-	body, _, err := c.doGet(ctx, path, nil, "text/plain")
+	body, _, err := c.doGet(ctx, token, path, nil, "text/plain")
 	if err != nil {
 		return "", err
 	}

@@ -8,6 +8,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Jeston10/pipeline-sherlock/internal/application"
 	"github.com/Jeston10/pipeline-sherlock/internal/domain"
+	"github.com/Jeston10/pipeline-sherlock/internal/platform/crypto"
 	pgplatform "github.com/Jeston10/pipeline-sherlock/internal/platform/postgres"
 )
 
@@ -277,5 +279,98 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 	}
 	if _, ok, err := events.ClaimNext(ctx); err != nil || ok {
 		t.Errorf("ClaimNext after processed = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+}
+
+func TestIntegration_ProjectCredentialRoundTrip(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL not set; skipping live-DB integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	db, err := pgplatform.Connect(ctx, url)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer db.Close()
+	if err := pgplatform.Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	// Truncating projects cascades to project_credentials (FK ON DELETE CASCADE).
+	if _, err := db.Pool.Exec(ctx, "TRUNCATE projects CASCADE"); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+
+	projects := NewProjectRepo(db.Pool)
+	creds := NewProjectCredentialRepo(db.Pool)
+
+	mk := func(gitlabID int64, name string) domain.Project {
+		p, err := domain.NewProject(gitlabID, name, "team/platform")
+		if err != nil {
+			t.Fatalf("new project: %v", err)
+		}
+		stored, err := projects.Create(ctx, p.WithOwner("acme").WithWebhookSecretHash("h"))
+		if err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+		return stored
+	}
+	projA := mk(1001, "svc-a")
+	mk(2002, "svc-b") // project B has no stored token; it falls back to global.
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 7)
+	}
+	sealer, err := crypto.NewSealer(key)
+	if err != nil {
+		t.Fatalf("sealer: %v", err)
+	}
+
+	ciphertext, err := sealer.Seal([]byte("glpat-project-a"))
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if err := creds.Upsert(ctx, projA.ID, ciphertext); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// What is on disk must be ciphertext, never the plaintext token.
+	var raw []byte
+	if err := db.Pool.QueryRow(ctx,
+		"SELECT token_ciphertext FROM project_credentials WHERE project_id = $1", string(projA.ID),
+	).Scan(&raw); err != nil {
+		t.Fatalf("read ciphertext: %v", err)
+	}
+	if bytes.Contains(raw, []byte("glpat-project-a")) {
+		t.Fatal("stored token_ciphertext contains the plaintext token")
+	}
+
+	// Resolve: A uses its own token; B falls back to the global token.
+	resolver := application.NewProjectTokenResolver(projects, creds, sealer, "glpat-global")
+	if tok, err := resolver.TokenForGitLabProject(ctx, 1001); err != nil || tok != "glpat-project-a" {
+		t.Errorf("resolve A = (%q, %v), want glpat-project-a", tok, err)
+	}
+	if tok, err := resolver.TokenForGitLabProject(ctx, 2002); err != nil || tok != "glpat-global" {
+		t.Errorf("resolve B = (%q, %v), want glpat-global (fallback)", tok, err)
+	}
+
+	// Upsert replaces rather than duplicates.
+	rotated, _ := sealer.Seal([]byte("glpat-project-a-rotated"))
+	if err := creds.Upsert(ctx, projA.ID, rotated); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	var count int
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM project_credentials").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("project_credentials rows = %d, want 1 after upsert", count)
+	}
+	if tok, err := resolver.TokenForGitLabProject(ctx, 1001); err != nil || tok != "glpat-project-a-rotated" {
+		t.Errorf("resolve A after rotate = (%q, %v), want the rotated token", tok, err)
 	}
 }

@@ -133,21 +133,22 @@ flowchart LR
     classDef planned fill:#8b949e22,stroke:#8b949e,stroke-width:1px,stroke-dasharray:4 3;
 ```
 
-### M7 · Slice 2 — Per-project GitLab credentials **[Planned]**
+### M7 · Slice 2 — Per-project GitLab credentials **[Built — see architecture.md §22]**
 
 **Goal.** The worker uses each project's own token, not one global PAT.
-**Changes.** Store an encrypted GitLab token per project (envelope encryption via
-the secret provider); resolve the token at reconcile/write-back time by project;
-fall back to the global token only if configured.
+**Changes.** Store an encrypted GitLab token per project (envelope encryption with
+the `ENCRYPTION_KEY` master key from the secret provider, `internal/platform/crypto`);
+resolve the token at reconcile/write-back time by project; fall back to the global
+token only if configured.
 **Tests.** Token-resolution unit tests; integration test for encrypted
 store/round-trip.
 **Done when.** Two projects with different tokens reconcile independently; no
-plaintext token at rest.
+plaintext token at rest. ✅
 
 ```mermaid
 flowchart TD
-    EV["inbox event<br/>(project)"]:::built --> RES["resolve project token"]:::planned
-    RES -.decrypt.-> STORE[("project_credentials<br/>encrypted")]:::planned
+    EV["inbox event<br/>(project)"]:::built --> RES["resolve project token"]:::built
+    RES -.decrypt.-> STORE[("project_credentials<br/>encrypted")]:::built
     RES --> GL["GitLab client<br/>(per-project token)"]:::built
     GL --> API["GitLab API"]:::built
 
