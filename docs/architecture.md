@@ -877,6 +877,53 @@ require a non-empty owner), so any pre-existing data is private by default.
 
 ---
 
+## 21. Secret provider port **[Built: M7 slice 1]**
+
+Secrets (the database URL and GitLab token) were read straight from the
+environment. Slice 1 routes them through a provider port so their *source* can
+change — environment for local dev, mounted files in production, a cloud secret
+manager later — without touching the config loader or any caller.
+
+```mermaid
+flowchart TD
+    LOAD["config.Load(getenv)"] --> SEL["secret.FromEnv(getenv)<br/>reads SECRET_PROVIDER"]
+    SEL -->|"\"\" or env (default)"| ENV["EnvProvider<br/>Get = getenv(name)"]
+    SEL -->|file + SECRETS_DIR| FILE["FileProvider<br/>read &lt;dir&gt;/&lt;name&gt;"]
+    SEL -->|file, no dir| E1["ErrSecretsDirRequired"]
+    SEL -->|unknown| E2["ErrUnknownProvider"]
+    ENV --> GET["Provider.Get(ctx, DATABASE_URL)<br/>Provider.Get(ctx, GITLAB_TOKEN)"]
+    FILE --> GET
+    GET --> CFG["Config{DatabaseURL, GitLabToken}"]
+    CFG --> VAL["validate()<br/>DATABASE_URL still required"]
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class LOAD,SEL,ENV,FILE,GET,CFG,VAL built;
+    classDef err fill:#f8514922,stroke:#f85149,stroke-width:2px;
+    class E1,E2 err;
+```
+
+**Walkthrough.** `Provider` is a one-method port — `Get(ctx, name) (string, error)`
+— defined in `internal/platform/secret`. A missing *optional* secret returns
+`("", nil)`; the config layer still decides what is required (`DATABASE_URL`
+fails validation when empty). `config.Load` selects a provider with
+`secret.FromEnv(getenv)` and resolves `DATABASE_URL` and `GITLAB_TOKEN` through
+it; every other setting still reads the environment directly. `Load`'s signature
+is unchanged, so `cmd/server` and the tests are untouched — the provider is
+selected from the same environment lookup they already pass.
+
+Two adapters ship. `EnvProvider` (the default, `SECRET_PROVIDER` unset or `env`)
+returns the named environment variable, keeping local dev a copy-`.env`-and-go
+experience. `FileProvider` (`SECRET_PROVIDER=file`, `SECRETS_DIR=<dir>`) reads
+each secret from `<dir>/<NAME>` — the Docker/Kubernetes mounted-secret convention
+(e.g. `/run/secrets/DATABASE_URL`) — so values never enter the process
+environment; it trims trailing newlines and **rejects any name containing a path
+separator or `..`** so a secret name can never escape the directory. An
+unrecognised `SECRET_PROVIDER`, or `file` without `SECRETS_DIR`, fails fast at
+startup. A cloud adapter (AWS Secrets Manager / Vault) is a future slice behind
+the same port — nothing above `Provider` changes when it lands.
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

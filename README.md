@@ -135,6 +135,7 @@ internal/
   adapters/gitlab/     # GitLab REST client (pagination, retries, timeouts)
   adapters/postgres/   # repository implementations (projects, inbox, pipelines)
   platform/postgres/   # pgx pool + embedded migrator
+  platform/secret/     # secret provider port (env / file-backed)
   transport/http/      # router, middleware, health/readiness, API handlers (incidents)
 migrations/            # embedded, reversible SQL migrations
 tests/fixtures/        # deterministic demo/seed data
@@ -225,9 +226,17 @@ web/                   # React + TypeScript dashboard (incidents list + detail +
   registration, the project list and incident reads to that owner; a cross-owner
   project reads as 404, so existence never leaks. See
   [docs/architecture.md](docs/architecture.md) §20.
+- **Built (M7 slice 1):** a secret-provider port — `DATABASE_URL` and
+  `GITLAB_TOKEN` are resolved through a `Provider` abstraction
+  (`internal/platform/secret`), not read straight from the environment.
+  `SECRET_PROVIDER` selects the backend: `env` (default, local dev) or `file`,
+  which reads each secret from `<SECRETS_DIR>/<NAME>` (the Docker/Kubernetes
+  mounted-secret convention) so values stay out of the environment; `config.Load`
+  keeps its signature. See [docs/architecture.md](docs/architecture.md) §21.
 - **Not yet built:** the rest of the
   [production-readiness roadmap](docs/production-readiness-roadmap.md) (M7
-  onward — secrets, transport hardening, observability, …), dashboard
+  slice 2 onward — per-project GitLab tokens, transport hardening,
+  observability, …), dashboard
   authentication (M14), deep-linkable incident selection (URL state), richer
   flaky/regression detection using success data and timing, and any benchmark
   claims. No performance or scale numbers are claimed.

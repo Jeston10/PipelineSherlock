@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-27 (M6 slice 2)
+Last updated: 2026-11-27 (M7 slice 1)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -336,6 +336,25 @@ transport/http 84.0% — all ≥80%), and the `-tags=integration` tests compile.
 Verified locally: `gofmt`/`go vet`/`go build` clean, `go test ./...` green
 (domain 94.9%, application 83.1%, transport/http 83.9% — all ≥80%), and
 `-tags=integration` compiles. See [docs/architecture.md](docs/architecture.md) §20.
+
+## Milestone 7 — Secrets & per-project GitLab identity 🚧 in progress
+
+### Slice 1 — secret provider port ✅ done (this slice)
+
+- `internal/platform/secret`: a `Provider` port (`Get(ctx, name) (string, error)`)
+  with two adapters — `EnvProvider` (default, reads env vars) and `FileProvider`
+  (reads `<SECRETS_DIR>/<NAME>`, the Docker/Kubernetes mounted-secret convention,
+  trimming newlines and rejecting names with a path separator or `..`). `FromEnv`
+  selects the backend from `SECRET_PROVIDER` and fails fast on an unknown value or
+  on `file` without `SECRETS_DIR`. Contract-tested (both adapters + the selector).
+- `config.Load` resolves `DATABASE_URL` and `GITLAB_TOKEN` through the provider;
+  signature unchanged, so `cmd/server` and existing tests are untouched. Config
+  tests extended with the file-provider and unknown-provider paths.
+- `.env.example` documents `SECRET_PROVIDER` / `SECRETS_DIR` (no secret values).
+
+Verified locally: `gofmt`/`go vet`/`go build` clean, `go test ./...` green
+(secret 86.4%, config 81.8% — all ≥80%), and `-tags=integration` compiles. See
+[docs/architecture.md](docs/architecture.md) §21.
 
 ## Production readiness (post-M5)
 

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -165,6 +167,37 @@ func TestLoad_SecondsInteger(t *testing.T) {
 	}
 	if cfg.ShutdownTimeout != 20*time.Second {
 		t.Errorf("ShutdownTimeout = %s, want 20s", cfg.ShutdownTimeout)
+	}
+}
+
+// TestLoad_FileSecretProvider resolves DATABASE_URL from a mounted-secret file
+// rather than the environment, exercising the SECRET_PROVIDER=file path.
+func TestLoad_FileSecretProvider(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "DATABASE_URL"),
+		[]byte("postgres://localhost/ps\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	cfg, err := Load(envMap(map[string]string{
+		"SECRET_PROVIDER": "file",
+		"SECRETS_DIR":     dir,
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DatabaseURL != "postgres://localhost/ps" {
+		t.Errorf("DatabaseURL = %q, want the file's trimmed value", cfg.DatabaseURL)
+	}
+}
+
+// TestLoad_UnknownSecretProvider fails fast when SECRET_PROVIDER is unrecognised.
+func TestLoad_UnknownSecretProvider(t *testing.T) {
+	_, err := Load(envMap(map[string]string{
+		"DATABASE_URL":    "postgres://localhost/ps",
+		"SECRET_PROVIDER": "wat",
+	}))
+	if err == nil {
+		t.Fatal("expected an error for an unknown SECRET_PROVIDER")
 	}
 }
 

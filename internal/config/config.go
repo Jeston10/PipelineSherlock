@@ -5,12 +5,15 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Jeston10/pipeline-sherlock/internal/platform/secret"
 )
 
 // Config holds all runtime configuration for the PipelineSherlock server.
@@ -63,16 +66,34 @@ func Load(getenv Getenv) (Config, error) {
 		getenv = os.Getenv
 	}
 
+	// Secrets (the database URL and GitLab token) are resolved through a provider
+	// so their source can change — environment variables for local dev, mounted
+	// files in production, a cloud secret manager later — without touching this
+	// loader. SECRET_PROVIDER selects it; the default reads from the environment.
+	secrets, err := secret.FromEnv(getenv)
+	if err != nil {
+		return Config{}, fmt.Errorf("configure secret provider: %w", err)
+	}
+	ctx := context.Background()
+	databaseURL, err := secrets.Get(ctx, "DATABASE_URL")
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve DATABASE_URL: %w", err)
+	}
+	gitlabToken, err := secrets.Get(ctx, "GITLAB_TOKEN")
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve GITLAB_TOKEN: %w", err)
+	}
+
 	cfg := Config{
 		Env:              firstNonEmpty(getenv("APP_ENV"), "development"),
 		HTTPAddr:         firstNonEmpty(getenv("HTTP_ADDR"), defaultHTTPAddr),
-		DatabaseURL:      strings.TrimSpace(getenv("DATABASE_URL")),
+		DatabaseURL:      strings.TrimSpace(databaseURL),
 		RedisURL:         strings.TrimSpace(getenv("REDIS_URL")),
 		ShutdownTimeout:  defaultShutdownTimeout,
 		ReadTimeout:      defaultReadTimeout,
 		WriteTimeout:     defaultWriteTimeout,
 		GitLabBaseURL:    firstNonEmpty(getenv("GITLAB_BASE_URL"), defaultGitLabBaseURL),
-		GitLabToken:      strings.TrimSpace(getenv("GITLAB_TOKEN")),
+		GitLabToken:      strings.TrimSpace(gitlabToken),
 		WriteBackEnabled: boolEnv(getenv, "GITLAB_WRITEBACK_ENABLED"),
 	}
 

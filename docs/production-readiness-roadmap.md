@@ -107,21 +107,26 @@ flowchart TD
 Goal: no long-lived secret in plain env, and each project carries its own GitLab
 credential instead of one shared PAT.
 
-### M7 · Slice 1 — Secret provider port **[Planned]**
+### M7 · Slice 1 — Secret provider port **[Built — see architecture.md §21]**
 
 **Goal.** Load secrets through a provider abstraction, not raw `os.Getenv`.
-**Changes.** A `SecretProvider` port (`Get(ctx, name)`), an env-backed default,
-and one real adapter (e.g. AWS Secrets Manager / Vault) behind a build/opt flag;
-`config.Load` resolves `DATABASE_URL`/`GITLAB_TOKEN` via the provider.
-**Tests.** Provider contract tests (fake + env); config load tests.
+**Changes.** A `Provider` port (`Get(ctx, name)`) in `internal/platform/secret`,
+an env-backed default, and a dependency-free `FileProvider` (mounted-secret
+files) as the opt-in real adapter — selected by `SECRET_PROVIDER` (a cloud
+adapter such as AWS Secrets Manager / Vault is a future slice behind the same
+port); `config.Load` resolves `DATABASE_URL`/`GITLAB_TOKEN` via the provider with
+its signature unchanged.
+**Tests.** Provider contract tests (env + file + selector); config load tests
+(file-provider and unknown-provider paths).
 **Done when.** The service boots with secrets sourced from the provider; env
-remains the local-dev default.
+remains the local-dev default. ✅
 
 ```mermaid
 flowchart LR
-    BOOT["config.Load"]:::built --> SP["SecretProvider.Get"]:::planned
-    SP --> ENV["env provider (dev)"]:::planned
-    SP --> MGR["secret manager (prod)"]:::planned
+    BOOT["config.Load"]:::built --> SP["secret.FromEnv → Provider.Get"]:::built
+    SP --> ENV["env provider (dev, default)"]:::built
+    SP --> FILE["file provider (SECRETS_DIR)"]:::built
+    SP --> MGR["cloud secret manager (future)"]:::planned
     SP --> CFG["resolved Config"]:::built
 
     classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
