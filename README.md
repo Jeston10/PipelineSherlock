@@ -211,8 +211,18 @@ web/                   # React + TypeScript dashboard (incidents list + detail +
   the diagnosis (opt-in via `GITLAB_WRITEBACK_ENABLED`, and only with a GitLab
   token) once per incident+MR. Best-effort — a post failure never fails the
   event. See [docs/architecture.md](docs/architecture.md) §18.
-- **Not yet built:** deep-linkable incident selection (URL state), richer
-  flaky/regression detection using success data and timing, auth/RBAC, and any
+- **Built (M6 slice 1):** API-key authentication — every `/api/v1` data route now
+  requires an `Authorization: Bearer <key>` whose SHA-256 hash matches a stored
+  key (`api_keys`, migration 0006), verified in the transport `authMiddleware`
+  (401 + `WWW-Authenticate` otherwise). Health probes and the GitLab webhook (its
+  own per-project token) stay public; the surface fails closed. Mint a key with
+  `server issue-key <name>` (plaintext shown once). This is slice 1 of the
+  [production-readiness roadmap](docs/production-readiness-roadmap.md); see
+  [docs/architecture.md](docs/architecture.md) §19.
+- **Not yet built:** per-caller authorization scoping (M6 slice 2) and the rest
+  of the [production-readiness roadmap](docs/production-readiness-roadmap.md),
+  dashboard authentication (M14), deep-linkable incident selection (URL state),
+  richer flaky/regression detection using success data and timing, and any
   benchmark claims. No performance or scale numbers are claimed.
 
 ## License

@@ -2,7 +2,7 @@
 
 Living status for PipelineSherlock. Updated as milestones progress.
 
-Last updated: 2026-11-26 (M5 slice 2)
+Last updated: 2026-11-27 (M6 slice 1)
 
 ## Milestone 0 — Foundation ✅ complete
 
@@ -284,14 +284,47 @@ Verified locally: `gofmt` clean, `go vet ./...` and `go build ./...` pass,
 - Deep-linkable incident selection (URL state) so a detail view is shareable.
 - Richer flaky/regression detection using success data and timing.
 
-## Later milestones
+## Milestone 6 — API authentication & authorization 🚧 in progress
 
-- Cross-cutting: auth/RBAC, rate limiting, observability, richer flaky/
-  regression detection using success data and timing, and bumping CI off the
-  deprecated Node 20 GitHub Actions.
-- Cross-cutting: auth/RBAC, rate limiting, observability, richer flaky/
-  regression detection using success data and timing, and bumping CI off the
-  deprecated Node 20 GitHub Actions.
+### Slice 1 — API-key authentication ✅ done (this slice)
+
+- Migration `0006_api_keys`: `api_keys` table storing a hash only, with a unique
+  `key_hash` (reversible).
+- `domain.APIKey` + `NewAPIKey` validation (bounded label, required hash);
+  immutable value. Table-driven tests.
+- `application.APIKeyService` — `Issue` (generate → hash via `platform/token` →
+  store, plaintext returned once) and `Authenticate` (hash → `FindByHash`;
+  opaque `ErrUnauthenticated` for empty/unknown), over a consumer-side
+  `APIKeyRepository`. Unit-tested with a fake repo.
+- `adapters/postgres.APIKeyRepo` — `Create` / `FindByHash`; integration test
+  extended with a create/find/unknown round-trip.
+- `transport/http.authMiddleware` — guards `/api/v1/*`, returning `401` +
+  `WWW-Authenticate: Bearer` on a missing/malformed/empty/unknown key and when no
+  authenticator is configured (fails closed). Health probes and the GitLab
+  webhook (own per-project token) stay public. Unit-tested end-to-end
+  (valid / missing / malformed / empty / unknown / no-authenticator + the public
+  routes).
+- `cmd/server`: `server issue-key <name>` mints a key (plaintext printed once,
+  never logged); `APIKeyService` wired unconditionally into the router `Deps`.
+
+Verified locally: `gofmt` clean, `go vet ./...` and `go build ./...` pass,
+`go test ./...` green (coverage: domain 96.0%, application 83.3%,
+transport/http 84.0% — all ≥80%), and the `-tags=integration` tests compile. See
+[docs/architecture.md](docs/architecture.md) §19.
+
+> Note: the M4 dashboard calls `/api/v1` and now receives `401` until it sends a
+> key — dashboard authentication is M14 slice 1.
+
+## Production readiness (post-M5)
+
+The feature set (M0–M5) is complete but this is not yet a production system. The
+path from here is planned as PR-sized slices — each one reviewable, test-first,
+and carrying a workflow diagram — in
+[docs/production-readiness-roadmap.md](docs/production-readiness-roadmap.md): 19
+slices across 9 milestones (M6 API authn/authz, M7 secrets & per-project GitLab
+identity, M8 transport hardening, M9 safe deploys & config, M10 observability,
+M11 reliability & scale, M12 data/DR/compliance, M13 supply chain & release, M14
+frontend production). M6–M9.1 are the deployment blockers; the rest is hardening.
 
 ## Exact local run commands
 

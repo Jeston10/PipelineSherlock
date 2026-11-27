@@ -6,6 +6,7 @@
 //	server serve      # same as above
 //	server migrate    # apply pending migrations and exit
 //	server rollback   # revert the most recent migration and exit
+//	server issue-key <name>  # mint an API key, print it once, and exit
 package main
 
 import (
@@ -16,6 +17,7 @@ import (
 	nethttp "net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -76,9 +78,36 @@ func run(logger *slog.Logger) error {
 			return fmt.Errorf("migrate before serve: %w", err)
 		}
 		return serve(cfg, db, logger)
+	case "issue-key":
+		name := ""
+		if len(os.Args) > 2 {
+			name = os.Args[2]
+		}
+		return issueAPIKey(startupCtx, db, name, logger)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
+}
+
+// issueAPIKey mints a new API key under the given name, printing the plaintext
+// to stdout exactly once (never logged), then exits. Operators run this to
+// obtain a credential for the authenticated /api/v1 surface.
+func issueAPIKey(ctx context.Context, db *postgres.DB, name string, logger *slog.Logger) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("usage: server issue-key <name>")
+	}
+	if err := postgres.Migrate(ctx, db); err != nil {
+		return fmt.Errorf("migrate before issue-key: %w", err)
+	}
+	svc := application.NewAPIKeyService(pgrepo.NewAPIKeyRepo(db.Pool))
+	res, err := svc.Issue(ctx, name)
+	if err != nil {
+		return fmt.Errorf("issue api key: %w", err)
+	}
+	fmt.Printf("API key issued.\n  id:   %s\n  name: %s\n  key:  %s\n",
+		res.APIKey.ID, res.APIKey.Name, res.PlaintextKey)
+	logger.Info("api key issued", slog.String("id", res.APIKey.ID), slog.String("name", res.APIKey.Name))
+	return nil
 }
 
 func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
@@ -91,6 +120,7 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 	registerSvc := application.NewRegisterProjectService(projectRepo)
 	ingestSvc := application.NewIngestWebhookService(projectRepo, eventRepo)
 	incidentSvc := application.NewIncidentService(projectRepo, incidentRepo)
+	apiKeySvc := application.NewAPIKeyService(pgrepo.NewAPIKeyRepo(db.Pool))
 
 	// The background worker reconciles inbox events against GitLab when a token
 	// is configured; otherwise it falls back to the webhook payload.
@@ -118,6 +148,7 @@ func serve(cfg config.Config, db *postgres.DB, logger *slog.Logger) error {
 		Projects:  registerSvc,
 		Webhooks:  ingestSvc,
 		Incidents: incidentSvc,
+		APIKeys:   apiKeySvc,
 		Logger:    logger,
 	})
 

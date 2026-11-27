@@ -36,6 +36,7 @@ type Deps struct {
 	Projects        ProjectService
 	Webhooks        WebhookIngestor
 	Incidents       IncidentLister
+	APIKeys         APIKeyAuthenticator
 	Logger          *slog.Logger
 	MaxWebhookBytes int64
 }

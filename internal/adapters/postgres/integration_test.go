@@ -231,6 +231,33 @@ func TestIntegration_InboxAndPipelineLifecycle(t *testing.T) {
 		t.Errorf("comment = (status %q, note %d, postedAt %v), want posted/777/non-nil", status, noteID, postedAt)
 	}
 
+	// API keys: store a hashed key and look it up by hash; unknown misses cleanly.
+	apiKeys := NewAPIKeyRepo(db.Pool)
+	if _, err := db.Pool.Exec(ctx, "TRUNCATE api_keys"); err != nil {
+		t.Fatalf("truncate api_keys: %v", err)
+	}
+	keyRec, err := domain.NewAPIKey("ci-dashboard", "hash-abc")
+	if err != nil {
+		t.Fatalf("new api key: %v", err)
+	}
+	storedKey, err := apiKeys.Create(ctx, keyRec)
+	if err != nil {
+		t.Fatalf("create api key: %v", err)
+	}
+	if storedKey.ID == "" {
+		t.Error("stored api key should carry an id")
+	}
+	foundKey, ok, err := apiKeys.FindByHash(ctx, "hash-abc")
+	if err != nil || !ok {
+		t.Fatalf("find api key = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	if foundKey.Name != "ci-dashboard" {
+		t.Errorf("found key name = %q, want ci-dashboard", foundKey.Name)
+	}
+	if _, ok, err := apiKeys.FindByHash(ctx, "no-such-hash"); err != nil || ok {
+		t.Errorf("FindByHash(unknown) = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+
 	// Mark processed; the inbox should then be empty.
 	if err := events.MarkProcessed(ctx, claimed.ID); err != nil {
 		t.Fatalf("mark processed: %v", err)

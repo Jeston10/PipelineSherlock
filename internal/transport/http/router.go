@@ -42,7 +42,9 @@ func NewRouter(deps Deps) http.Handler {
 	// request-id assignment wraps the mux.
 	return recoverMiddleware(logger)(
 		logMiddleware(logger)(
-			requestIDMiddleware(mux),
+			requestIDMiddleware(
+				authMiddleware(deps.APIKeys)(mux),
+			),
 		),
 	)
 }

@@ -785,6 +785,57 @@ write-back option.
 
 ---
 
+## 19. API-key authentication **[Built: M6 slice 1]**
+
+The first production-readiness milestone closes the open door left by M0–M5:
+every `/api/v1` data route now requires a valid API key. This is slice 1 of M6
+in the [production-readiness roadmap](production-readiness-roadmap.md).
+
+```mermaid
+flowchart LR
+    REQ["/api/v1 request"] --> AUTH["authMiddleware"]
+    AUTH --> PUB{"public route?<br/>/healthz · /readyz<br/>/api/v1/webhooks/*"}
+    PUB -->|yes| H["handler"]
+    PUB -->|no| BEARER{"Bearer key present?"}
+    BEARER -->|no| U401["401 + WWW-Authenticate: Bearer"]
+    BEARER -->|yes| VERIFY["APIKeyService.Authenticate<br/>SHA-256 hash → FindByHash"]
+    VERIFY -->|unknown / empty| U401
+    VERIFY -->|match| H
+    VERIFY -.lookup.-> KEYS[("api_keys<br/>hash only")]
+    CLI["server issue-key &lt;name&gt;<br/>mint, print plaintext once"] -.writes.-> KEYS
+
+    classDef built fill:#1f6feb22,stroke:#1f6feb,stroke-width:2px;
+    class REQ,AUTH,PUB,H,BEARER,U401,VERIFY,KEYS,CLI built;
+```
+
+**Walkthrough.** `authMiddleware` sits in the chain inside request-id and logging
+(so rejected calls are still traced) and outside the mux. It first asks
+`requiresAuth`: a path is protected when it is under `/api/v1/` **and not** under
+`/api/v1/webhooks/`. The health probes live outside `/api/v1` and the GitLab
+webhook keeps its own per-project token (§7–§8), so both stay public — the
+webhook must not demand an operator key from GitLab.
+
+For a protected route the middleware extracts a bearer token from the
+`Authorization` header. A missing or malformed header, an empty token, or no
+configured authenticator all **fail closed** with `401` and a
+`WWW-Authenticate: Bearer` challenge. Otherwise it calls
+`APIKeyService.Authenticate`, which hashes the presented key with the existing
+`platform/token` SHA-256 helper and looks it up by hash (`FindByHash`). The
+comparison is over hashes, never the secret, so a direct indexed lookup leaks
+nothing useful about any key's plaintext; an unknown key returns the opaque
+`ErrUnauthenticated`, which the middleware maps to the same `401` as a missing
+key (callers cannot distinguish "no key" from "wrong key").
+
+Keys are stored hash-only in `api_keys` (migration 0006), mirroring the
+webhook-secret discipline: the plaintext is shown exactly once, when an operator
+runs `server issue-key <name>`, and is never logged. `cmd/server` wires the
+`APIKeyService` into the router unconditionally, so the authenticated surface is
+never accidentally disabled. (The M4 dashboard calls `/api/v1` and will now get
+`401` until it sends a key — dashboard auth is M14 slice 1. Per-caller
+authorization scoping is M6 slice 2.)
+
+---
+
 ## Related documents
 
 - [ADR 0001 — Record architecture decisions](adr/0001-record-architecture-decisions.md)

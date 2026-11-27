@@ -47,9 +47,10 @@ func TestListIncidentsEndpoint(t *testing.T) {
 		FirstSeenAt:     time.Unix(1000, 0).UTC(),
 		LastSeenAt:      time.Unix(2000, 0).UTC(),
 	}}}
-	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister})
+	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister, APIKeys: stubAuthenticator{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/1001/incidents?limit=10", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -70,9 +71,10 @@ func TestListIncidentsEndpoint(t *testing.T) {
 
 func TestListIncidents_UnknownProject(t *testing.T) {
 	lister := &fakeIncidentLister{err: application.ErrProjectNotFound}
-	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister})
+	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister, APIKeys: stubAuthenticator{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/9999/incidents", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -82,9 +84,10 @@ func TestListIncidents_UnknownProject(t *testing.T) {
 }
 
 func TestListIncidents_InvalidID(t *testing.T) {
-	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: &fakeIncidentLister{}})
+	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: &fakeIncidentLister{}, APIKeys: stubAuthenticator{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/not-a-number/incidents", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -102,9 +105,10 @@ func TestGetIncidentEndpoint(t *testing.T) {
 		AffectedRefs: []domain.RefSummary{{Ref: "main", OccurrenceCount: 3, DistinctSHAs: 2}},
 		Signals:      domain.IncidentSignals{DistinctRefs: 1, DistinctSHAs: 2, FlakySuspected: true, RegressionSuspected: true},
 	}}
-	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister})
+	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister, APIKeys: stubAuthenticator{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/1001/incidents/abc?limit=25", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -132,9 +136,10 @@ func TestGetIncidentEndpoint(t *testing.T) {
 
 func TestGetIncident_UnknownProject(t *testing.T) {
 	lister := &fakeIncidentLister{detailErr: application.ErrProjectNotFound}
-	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister})
+	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister, APIKeys: stubAuthenticator{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/9999/incidents/abc", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -145,9 +150,10 @@ func TestGetIncident_UnknownProject(t *testing.T) {
 
 func TestGetIncident_UnknownFingerprint(t *testing.T) {
 	lister := &fakeIncidentLister{detailErr: application.ErrIncidentNotFound}
-	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister})
+	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: lister, APIKeys: stubAuthenticator{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/1001/incidents/nope", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -157,9 +163,10 @@ func TestGetIncident_UnknownFingerprint(t *testing.T) {
 }
 
 func TestGetIncident_InvalidID(t *testing.T) {
-	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: &fakeIncidentLister{}})
+	router := NewRouter(Deps{Readiness: fakeChecker{}, Incidents: &fakeIncidentLister{}, APIKeys: stubAuthenticator{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/bad/incidents/abc", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 

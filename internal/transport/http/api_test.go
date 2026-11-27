@@ -41,6 +41,7 @@ func newTestRouter(projects ProjectService, webhooks WebhookIngestor) http.Handl
 		Readiness: fakeChecker{},
 		Projects:  projects,
 		Webhooks:  webhooks,
+		APIKeys:   stubAuthenticator{},
 	})
 }
 
@@ -54,6 +55,7 @@ func TestRegisterProjectEndpoint(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects",
 		strings.NewReader(`{"gitlab_project_id":1001,"name":"svc","namespace":"team"}`))
+	req.Header.Set("Authorization", "Bearer test-key")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
